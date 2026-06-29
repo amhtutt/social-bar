@@ -174,6 +174,11 @@ function StaffPageContent() {
           </p>
         </div>
         <div style={styles.userArea}>
+          {profile?.role === "admin" && (
+            <Link href="/admin" style={styles.menuEditorLink}>
+              📋 Menu Editor
+            </Link>
+          )}
           <Link href="/kitchen" style={styles.kitchenLink}>
             🍳 Kitchen
           </Link>
@@ -314,6 +319,14 @@ const styles = {
     fontWeight: 700,
     fontSize: 13,
     color: theme.color.accent,
+    textDecoration: "none",
+    whiteSpace: "nowrap",
+  },
+  menuEditorLink: {
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 13,
+    color: theme.color.textSecondary,
     textDecoration: "none",
     whiteSpace: "nowrap",
   },

@@ -129,7 +129,7 @@ export default function StaffManager() {
 
         <Field label="Role">
           <div style={{ display: "flex", gap: 8 }}>
-            {["manager", "server"].map((r) => (
+            {["manager", "server", "kitchen"].map((r) => (
               <button
                 key={r}
                 onClick={() => setFormData((f) => ({ ...f, role: r }))}
@@ -138,7 +138,7 @@ export default function StaffManager() {
                   ...(formData.role === r ? styles.roleOptionActive : {}),
                 }}
               >
-                {r === "manager" ? "Manager" : "Server"}
+                {r === "manager" ? "Manager" : r === "server" ? "Server" : "Kitchen"}
               </button>
             ))}
           </div>
@@ -223,17 +223,27 @@ const styles = {
     border: `1px solid ${theme.color.border}`,
     borderRadius: theme.radius.md,
   },
-  roleBadge: (role) => ({
-    fontFamily: theme.font.display,
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: "0.05em",
-    padding: "4px 9px",
-    borderRadius: 6,
-    color: role === "manager" ? theme.color.warning : theme.color.accent,
-    background: role === "manager" ? theme.color.warningBg : theme.color.accentBg,
-    flexShrink: 0,
-  }),
+  roleBadge: (role) => {
+    const colorMap = {
+      manager: theme.color.warning,
+      kitchen: theme.color.info,
+    };
+    const bgMap = {
+      manager: theme.color.warningBg,
+      kitchen: theme.color.infoBg,
+    };
+    return {
+      fontFamily: theme.font.display,
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: "0.05em",
+      padding: "4px 9px",
+      borderRadius: 6,
+      color: colorMap[role] ?? theme.color.accent,
+      background: bgMap[role] ?? theme.color.accentBg,
+      flexShrink: 0,
+    };
+  },
   email: {
     fontFamily: theme.font.body,
     fontSize: 13,

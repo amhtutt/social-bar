@@ -61,7 +61,8 @@ export function AuthProvider({ children }) {
     isAdmin: role === "admin",
     isManager: role === "manager",
     isServer: role === "server",
-    isStaff: role === "admin" || role === "manager" || role === "server",
+    isKitchen: role === "kitchen",
+    isStaff: role === "admin" || role === "manager" || role === "server" || role === "kitchen",
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

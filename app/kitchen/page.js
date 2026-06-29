@@ -340,7 +340,7 @@ function KitchenPageContent() {
 
 export default function KitchenPage() {
   return (
-    <AdminGuard requiredRoles={["admin", "manager", "server"]}>
+    <AdminGuard requiredRoles={["admin", "manager", "server", "kitchen"]}>
       <KitchenPageContent />
     </AdminGuard>
   );
