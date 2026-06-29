@@ -3,22 +3,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // app/kitchen/page.js  —  Kitchen Display System (KDS)
 //
-// Dedicated screen meant for a single tablet/monitor left running in the
-// kitchen — NOT a tab inside /staff. Shows every order venue-wide as a
-// ticket, oldest first (FIFO), since "what do I cook next" maps better to
-// chronological order than the table-grouped layout Floor View uses.
+// Dedicated screen for a single tablet/monitor left running in the
+// kitchen. Still READ-ONLY with respect to order status (no
+// Preparing/Ready buttons) — that's a deliberate, deferred decision.
 //
-// READ-ONLY in this first version, per product decision — no status
-// buttons, no tap targets. Designed for viewing from a few feet away in a
-// busy kitchen: larger text, higher contrast, no fine print, no dense
-// multi-column layout.
-//
-// Auth: same AdminGuard pattern as /staff — admin, manager, or server can
-// view. A venue can hand a server-tier login to kitchen staff specifically
-// if they want a lighter-weight account than admin/manager.
+// Three additions in this pass:
+//   1. Tickets split into "New" (under 5 min) and "Older" sections,
+//      instead of one long undifferentiated grid — urgency is grouped,
+//      not just color-coded per card.
+//   2. A short audible chime plays when a NEW order arrives, since
+//      kitchen staff are heads-down cooking, not watching the screen.
+//   3. A "Dismiss" button per ticket — LOCAL ONLY (localStorage on this
+//      device), does NOT touch order status in Firestore. This is
+//      intentionally not the same as marking an order "served" — it's
+//      just "stop showing me this on this kitchen screen." Dismissals do
+//      NOT sync across multiple kitchen screens, which is the correct
+//      tradeoff for a purely local "get this off my view" action.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { signOut } from "@/lib/userService";
 import { subscribeToVenueOrders } from "@/lib/orderService";
@@ -26,12 +29,56 @@ import { theme } from "@/lib/theme";
 import AdminGuard from "@/components/admin/AdminGuard";
 import StagingBanner from "@/components/StagingBanner";
 
-export default function KitchenPage() {
-  return (
-    <AdminGuard requiredRoles={["admin", "manager", "server"]}>
-      <KitchenPageContent />
-    </AdminGuard>
-  );
+const NEW_TICKET_THRESHOLD_MIN = 5;
+const URGENT_THRESHOLD_MIN = 10;
+const DISMISSED_STORAGE_KEY = "kitchen_dismissed_order_ids";
+
+function loadDismissedIds() {
+  try {
+    const raw = localStorage.getItem(DISMISSED_STORAGE_KEY);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDismissedIds(idSet) {
+  try {
+    localStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify(Array.from(idSet)));
+  } catch {
+    // ignore — worst case, a dismissed ticket reappears after a refresh
+  }
+}
+
+/**
+ * playChime()
+ * A short, simple two-tone beep using the Web Audio API directly —
+ * avoids needing an audio file asset. Wrapped in try/catch since some
+ * browsers block audio until a user interaction has occurred on the
+ * page; failing silently is far better than crashing the whole screen
+ * over a sound effect.
+ */
+function playChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const playTone = (freq, startTime, duration) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = freq;
+      osc.type = "sine";
+      gain.gain.setValueAtTime(0.15, startTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(startTime);
+      osc.stop(startTime + duration);
+    };
+    const now = ctx.currentTime;
+    playTone(880, now, 0.15);
+    playTone(1100, now + 0.18, 0.18);
+  } catch (err) {
+    console.warn("[KitchenPage] Could not play chime:", err);
+  }
 }
 
 function Shimmer() {
@@ -47,13 +94,13 @@ function Shimmer() {
   );
 }
 
-function KitchenTicket({ order }) {
+function KitchenTicket({ order, onDismiss }) {
   const timeLabel = order.createdAt
     ? order.createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "—";
 
   const minutesAgo = order.createdAt ? Math.floor((Date.now() - order.createdAt.getTime()) / 60000) : null;
-  const isUrgent = minutesAgo !== null && minutesAgo >= 10;
+  const isUrgent = minutesAgo !== null && minutesAgo >= URGENT_THRESHOLD_MIN;
 
   return (
     <div style={{ ...styles.ticket, ...(isUrgent ? styles.ticketUrgent : {}) }}>
@@ -86,6 +133,27 @@ function KitchenTicket({ order }) {
       </div>
 
       {order.source === "staff" && <p style={styles.staffTag}>Added by staff</p>}
+
+      <button onClick={() => onDismiss(order.id)} style={styles.dismissBtn}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+function TicketSection({ title, count, accentColor, orders, onDismiss }) {
+  if (orders.length === 0) return null;
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={styles.sectionHeader}>
+        <span style={{ ...styles.sectionTitle, color: accentColor }}>{title}</span>
+        <span style={styles.sectionCount}>{count}</span>
+      </div>
+      <div style={styles.grid}>
+        {orders.map((order) => (
+          <KitchenTicket key={order.id} order={order} onDismiss={onDismiss} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -94,24 +162,77 @@ function KitchenPageContent() {
   const { profile, venueId } = useAuth();
   const [orders, setOrders] = useState(null);
   const [error, setError] = useState(false);
+  const [dismissedIds, setDismissedIds] = useState(() => new Set());
+  const knownOrderIdsRef = useRef(new Set());
+  const isFirstSnapshotRef = useRef(true);
+
+  useEffect(() => {
+    setDismissedIds(loadDismissedIds());
+  }, []);
 
   useEffect(() => {
     if (!venueId) return;
     const unsub = subscribeToVenueOrders(venueId, ({ data, error }) => {
-      if (error) console.error("[KitchenPage] subscribeToVenueOrders error:", error);
-      setError(!!error);
-      setOrders(error ? [] : [...data].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0)));
+      if (error) {
+        console.error("[KitchenPage] subscribeToVenueOrders error:", error);
+        setError(true);
+        setOrders([]);
+        return;
+      }
+
+      const sorted = [...data].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+
+      // Play a chime if any order in this snapshot is one we haven't seen
+      // before — but never on the very first snapshot after page load
+      // (otherwise every pre-existing order would chime at once on open).
+      if (!isFirstSnapshotRef.current) {
+        const hasNewOrder = sorted.some((o) => !knownOrderIdsRef.current.has(o.id));
+        if (hasNewOrder) playChime();
+      }
+      isFirstSnapshotRef.current = false;
+      knownOrderIdsRef.current = new Set(sorted.map((o) => o.id));
+
+      setError(false);
+      setOrders(sorted);
     });
     return () => unsub();
   }, [venueId]);
 
-  // Re-render every 30s purely so "Xm ago" / the urgency highlight stays
-  // accurate without requiring a new Firestore snapshot.
+  // Re-render every 30s purely so "Xm ago" / urgency / new-vs-older
+  // grouping stays accurate without requiring a new Firestore snapshot.
   const [, forceTick] = useState(0);
   useEffect(() => {
     const interval = setInterval(() => forceTick((n) => n + 1), 30000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleDismiss = (orderId) => {
+    setDismissedIds((prev) => {
+      const next = new Set(prev);
+      next.add(orderId);
+      saveDismissedIds(next);
+      return next;
+    });
+  };
+
+  const visibleOrders = useMemo(() => {
+    if (!orders) return [];
+    return orders.filter((o) => !dismissedIds.has(o.id));
+  }, [orders, dismissedIds]);
+
+  const { newOrders, olderOrders } = useMemo(() => {
+    const newList = [];
+    const olderList = [];
+    for (const order of visibleOrders) {
+      const minutesAgo = order.createdAt ? (Date.now() - order.createdAt.getTime()) / 60000 : 0;
+      if (minutesAgo < NEW_TICKET_THRESHOLD_MIN) {
+        newList.push(order);
+      } else {
+        olderList.push(order);
+      }
+    }
+    return { newOrders: newList, olderOrders: olderList };
+  }, [visibleOrders]);
 
   const isLoading = orders === null;
 
@@ -123,7 +244,7 @@ function KitchenPageContent() {
       <header style={styles.header}>
         <h1 style={styles.title}>🍳 Kitchen</h1>
         <div style={styles.headerRight}>
-          <span style={styles.ticketCount}>{isLoading ? "" : `${orders.length} active`}</span>
+          <span style={styles.ticketCount}>{isLoading ? "" : `${visibleOrders.length} active`}</span>
           <span style={styles.userEmail}>{profile?.email}</span>
           <button onClick={() => signOut()} style={styles.signOutBtn}>
             Sign Out
@@ -160,7 +281,7 @@ function KitchenPageContent() {
           </div>
         )}
 
-        {!isLoading && !error && orders.length === 0 && (
+        {!isLoading && !error && visibleOrders.length === 0 && (
           <div style={styles.emptyState}>
             <span style={{ fontSize: 56 }}>✅</span>
             <p style={styles.emptyTitle}>All caught up</p>
@@ -168,15 +289,34 @@ function KitchenPageContent() {
           </div>
         )}
 
-        {!isLoading && !error && orders.length > 0 && (
-          <div style={styles.grid}>
-            {orders.map((order) => (
-              <KitchenTicket key={order.id} order={order} />
-            ))}
-          </div>
+        {!isLoading && !error && visibleOrders.length > 0 && (
+          <>
+            <TicketSection
+              title="NEW"
+              count={newOrders.length}
+              accentColor={theme.color.accent}
+              orders={newOrders}
+              onDismiss={handleDismiss}
+            />
+            <TicketSection
+              title="OLDER"
+              count={olderOrders.length}
+              accentColor={theme.color.warning}
+              orders={olderOrders}
+              onDismiss={handleDismiss}
+            />
+          </>
         )}
       </main>
     </div>
+  );
+}
+
+export default function KitchenPage() {
+  return (
+    <AdminGuard requiredRoles={["admin", "manager", "server"]}>
+      <KitchenPageContent />
+    </AdminGuard>
   );
 }
 
@@ -231,6 +371,23 @@ const styles = {
   content: {
     maxWidth: 1600,
     margin: "0 auto",
+  },
+  sectionHeader: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 10,
+    marginBottom: 14,
+  },
+  sectionTitle: {
+    fontFamily: theme.font.display,
+    fontWeight: 800,
+    fontSize: 18,
+    letterSpacing: "0.08em",
+  },
+  sectionCount: {
+    fontFamily: theme.font.body,
+    fontSize: 13,
+    color: theme.color.textFaint,
   },
   grid: {
     display: "grid",
@@ -318,6 +475,7 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     gap: 10,
+    marginBottom: 14,
   },
   itemRow: {
     display: "flex",
@@ -352,12 +510,23 @@ const styles = {
     color: theme.color.warning,
   },
   staffTag: {
-    margin: "12px 0 0",
-    paddingTop: 10,
-    borderTop: `1px solid ${theme.color.border}`,
+    margin: "0 0 12px",
     fontFamily: theme.font.body,
     fontSize: 12,
     color: theme.color.textFaint,
     fontStyle: "italic",
+  },
+  dismissBtn: {
+    width: "100%",
+    padding: "10px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.border}`,
+    background: "rgba(255,255,255,0.03)",
+    color: theme.color.textMuted,
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 12,
+    letterSpacing: "0.04em",
+    cursor: "pointer",
   },
 };

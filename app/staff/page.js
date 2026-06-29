@@ -15,6 +15,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { signOut } from "@/lib/userService";
 import { subscribeToVenueOrders, subscribeToVenueBillRequests } from "@/lib/orderService";
 import { subscribeToVenueServerCalls } from "@/lib/callServerService";
+import { subscribeToVenueTablets, subscribeToVenueFlaggedTables, flagTable, unflagTable } from "@/lib/tabletService";
 import { theme } from "@/lib/theme";
 import AdminGuard from "@/components/admin/AdminGuard";
 import TableOrdersCard from "@/components/staff/TableOrdersCard";
@@ -53,6 +54,8 @@ function StaffPageContent() {
   const [orders, setOrders] = useState(null);
   const [billRequests, setBillRequests] = useState([]);
   const [serverCalls, setServerCalls] = useState([]);
+  const [tablets, setTablets] = useState([]);
+  const [flaggedTables, setFlaggedTables] = useState([]);
   const [error, setError] = useState(false);
 
   const actor = { email: profile?.email, role: profile?.role };
@@ -76,17 +79,32 @@ function StaffPageContent() {
       setServerCalls(error ? [] : data);
     });
 
+    const unsubTablets = subscribeToVenueTablets(venueId, ({ data, error }) => {
+      if (error) console.error("[StaffPage] subscribeToVenueTablets error:", error);
+      setTablets(error ? [] : data);
+    });
+
+    const unsubFlagged = subscribeToVenueFlaggedTables(venueId, ({ data, error }) => {
+      if (error) console.error("[StaffPage] subscribeToVenueFlaggedTables error:", error);
+      setFlaggedTables(error ? [] : data);
+    });
+
     return () => {
       unsubOrders();
       unsubBillRequests();
       unsubServerCalls();
+      unsubTablets();
+      unsubFlagged();
     };
   }, [venueId]);
 
-  // Build table groups from orders, then ALSO include any table that has
-  // a pending server call but no orders yet (e.g. they just sat down and
-  // want a menu walkthrough before ordering anything) — otherwise that
-  // table's call would have nowhere to render.
+  // Build table groups from orders, then ALSO include:
+  //   - any table with a pending server call but no orders yet
+  //   - any table with an ONLINE tablet but no orders/calls yet (a table
+  //     that just sat down — "occupied but quiet" — previously invisible
+  //     on Floor View entirely, which made it look like nobody was there)
+  //   - any FLAGGED table, even if otherwise quiet, so a manually-flagged
+  //     table never silently disappears from view
   const tableGroups = useMemo(() => {
     if (!orders) return [];
 
@@ -96,10 +114,11 @@ function StaffPageContent() {
       grouped[order.tableNumber].push(order);
     }
 
-    const pendingCallTables = serverCalls
-      .filter((c) => c.status === "pending")
-      .map((c) => c.tableNumber);
-    for (const t of pendingCallTables) {
+    const pendingCallTables = serverCalls.filter((c) => c.status === "pending").map((c) => c.tableNumber);
+    const onlineTabletTables = tablets.filter((t) => t.status === "online").map((t) => t.tableNumber);
+    const flaggedTableNumbers = flaggedTables.map((f) => f.tableNumber);
+
+    for (const t of [...pendingCallTables, ...onlineTabletTables, ...flaggedTableNumbers]) {
       if (!grouped[t]) grouped[t] = [];
     }
 
@@ -109,18 +128,31 @@ function StaffPageContent() {
         const billRequest = billRequests.find(
           (br) => br.tableNumber === Number(tableNumber) && br.status === "pending"
         );
-        const serverCall = serverCalls.find(
-          (c) => c.tableNumber === Number(tableNumber) && c.status === "pending"
-        );
-        return { tableNumber: Number(tableNumber), orders: sorted, billRequest, serverCall };
+        const serverCall = serverCalls.find((c) => c.tableNumber === Number(tableNumber) && c.status === "pending");
+        const isOccupied = onlineTabletTables.includes(Number(tableNumber));
+        const flag = flaggedTables.find((f) => f.tableNumber === Number(tableNumber)) ?? null;
+        return { tableNumber: Number(tableNumber), orders: sorted, billRequest, serverCall, isOccupied, flag };
       })
       .sort((a, b) => a.tableNumber - b.tableNumber);
-  }, [orders, billRequests, serverCalls]);
+  }, [orders, billRequests, serverCalls, tablets, flaggedTables]);
 
   const isLoading = orders === null;
   const pendingBillCount = billRequests.filter((br) => br.status === "pending").length;
   const pendingCallCount = serverCalls.filter((c) => c.status === "pending").length;
   const availableTables = tableGroups.map((g) => g.tableNumber);
+
+  const handleToggleFlag = async (tableNumber, currentFlag) => {
+    try {
+      if (currentFlag) {
+        await unflagTable(venueId, tableNumber);
+      } else {
+        const note = window.prompt("Flag note (optional) — e.g. VIP, celebrating a birthday, needs a check-in:") ?? "";
+        await flagTable(venueId, tableNumber, note, actor);
+      }
+    } catch (err) {
+      console.error("[StaffPage] Failed to toggle table flag:", err);
+    }
+  };
 
   return (
     <div style={styles.page}>
@@ -218,6 +250,9 @@ function StaffPageContent() {
                     orders={group.orders}
                     billRequest={group.billRequest}
                     serverCall={group.serverCall}
+                    isOccupied={group.isOccupied}
+                    flag={group.flag}
+                    onToggleFlag={() => handleToggleFlag(group.tableNumber, group.flag)}
                     venueId={venueId}
                     actor={actor}
                   />

@@ -38,6 +38,26 @@ async function safeLog(entry) {
   }
 }
 
+/**
+ * formatRelativeTime(date)
+ * Short, human-scale "last updated" label for the item list — "2h ago"
+ * reads faster than a full timestamp when scanning a long menu list.
+ * Falls back to a real date once it's more than a few days old, since
+ * "14d ago" is less useful than just seeing the actual date at that point.
+ */
+function formatRelativeTime(date) {
+  if (!date) return null;
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDays = Math.floor(diffHr / 24);
+  if (diffDays < 4) return `${diffDays}d ago`;
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
 const EMPTY_FORM = {
   categoryId: "",
   name_en: "",
@@ -70,6 +90,59 @@ export default function ItemManager() {
 
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Bulk availability toggle — selectedIds is a Set, cleared whenever
+  // the underlying item list changes shape in a way that could leave it
+  // pointing at stale ids (e.g. after a bulk action completes).
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  const toggleSelected = (itemId) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  /**
+   * handleBulkSetAvailability(makeAvailable)
+   * Updates every selected item's `available` flag in one pass. Logs ONE
+   * activityLog entry summarizing the whole batch (not one per item) —
+   * "set 8 items unavailable" is a more useful audit line than 8
+   * separate near-identical entries clogging the feed.
+   */
+  const handleBulkSetAvailability = async (makeAvailable) => {
+    if (selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const targetItems = (items ?? []).filter((i) => selectedIds.has(i.id));
+      await Promise.all(targetItems.map((item) => updateMenuItem(item.id, { available: makeAvailable })));
+
+      await safeLog({
+        venueId,
+        actorEmail: profile?.email,
+        actorRole: profile?.role,
+        action: makeAvailable ? "menu_items_bulk_available" : "menu_items_bulk_unavailable",
+        tableNumber: null,
+        details: `${makeAvailable ? "Marked available" : "Marked unavailable"}: ${targetItems
+          .map((i) => i.name_en)
+          .join(", ")}`,
+      });
+
+      clearSelection();
+    } catch (err) {
+      console.error("[ItemManager] Bulk availability update failed:", err);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!venueId) return;
@@ -239,6 +312,31 @@ export default function ItemManager() {
         </button>
       </div>
 
+      {selectedIds.size > 0 && (
+        <div style={styles.bulkBar}>
+          <span style={styles.bulkCount}>{selectedIds.size} selected</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => handleBulkSetAvailability(true)}
+              disabled={bulkBusy}
+              style={{ ...styles.bulkBtnAvailable, opacity: bulkBusy ? 0.6 : 1 }}
+            >
+              Mark Available
+            </button>
+            <button
+              onClick={() => handleBulkSetAvailability(false)}
+              disabled={bulkBusy}
+              style={{ ...styles.bulkBtnUnavailable, opacity: bulkBusy ? 0.6 : 1 }}
+            >
+              Mark Unavailable
+            </button>
+            <button onClick={clearSelection} disabled={bulkBusy} style={styles.bulkBtnCancel}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {!isLoading && categories.length === 0 && (
         <div style={styles.warnBox}>
           <p style={{ fontFamily: theme.font.body, fontSize: 13, color: theme.color.warning, margin: 0 }}>
@@ -265,6 +363,13 @@ export default function ItemManager() {
         {!isLoading &&
           items.map((item) => (
             <div key={item.id} style={{ ...styles.row, opacity: item.available ? 1 : 0.55 }}>
+              <input
+                type="checkbox"
+                checked={selectedIds.has(item.id)}
+                onChange={() => toggleSelected(item.id)}
+                style={styles.rowCheckbox}
+              />
+
               <div
                 style={{
                   ...styles.thumb,
@@ -285,6 +390,12 @@ export default function ItemManager() {
                 </p>
                 <p style={styles.rowSubname}>
                   {categoryLookup[item.categoryId]?.name_en ?? "No category"} · ${item.price.toFixed(2)}
+                  {(item.updatedAt || item.createdAt) && (
+                    <span style={styles.lastUpdated}>
+                      {" "}
+                      · updated {formatRelativeTime(item.updatedAt ?? item.createdAt)}
+                    </span>
+                  )}
                 </p>
               </div>
 
@@ -432,6 +543,62 @@ const styles = {
     fontSize: 13,
     cursor: "pointer",
   },
+  bulkBar: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "10px 16px",
+    background: theme.color.accentBg,
+    border: `1px solid ${theme.color.accentBorder}`,
+    borderRadius: theme.radius.md,
+    marginBottom: 16,
+  },
+  bulkCount: {
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 13,
+    color: theme.color.accent,
+  },
+  bulkBtnAvailable: {
+    padding: "7px 14px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.accentBorder}`,
+    background: theme.color.accentBg,
+    color: theme.color.accent,
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 12,
+    cursor: "pointer",
+  },
+  bulkBtnUnavailable: {
+    padding: "7px 14px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.border}`,
+    background: "rgba(255,255,255,0.03)",
+    color: theme.color.textSecondary,
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 12,
+    cursor: "pointer",
+  },
+  bulkBtnCancel: {
+    padding: "7px 14px",
+    borderRadius: theme.radius.sm,
+    border: "none",
+    background: "transparent",
+    color: theme.color.textFaint,
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 12,
+    cursor: "pointer",
+  },
+  rowCheckbox: {
+    width: 18,
+    height: 18,
+    accentColor: theme.color.accent,
+    cursor: "pointer",
+    flexShrink: 0,
+  },
   warnBox: {
     padding: 16,
     background: theme.color.warningBg,
@@ -534,6 +701,9 @@ const styles = {
     fontFamily: theme.font.body,
     fontSize: 12,
     color: theme.color.textMuted,
+  },
+  lastUpdated: {
+    color: theme.color.textFaint,
   },
   editBtn: {
     padding: "7px 14px",

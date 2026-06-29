@@ -28,7 +28,17 @@ import { theme } from "@/lib/theme";
 import ConfirmDialog from "@/components/admin/ConfirmDialog";
 import StaffOrderModal from "./StaffOrderModal";
 
-export default function TableOrdersCard({ tableNumber, orders, billRequest, serverCall, venueId, actor }) {
+export default function TableOrdersCard({
+  tableNumber,
+  orders,
+  billRequest,
+  serverCall,
+  isOccupied,
+  flag,
+  onToggleFlag,
+  venueId,
+  actor,
+}) {
   const [removeTarget, setRemoveTarget] = useState(null);
   const [voidTarget, setVoidTarget] = useState(null);
   const [addOrderOpen, setAddOrderOpen] = useState(false);
@@ -37,6 +47,7 @@ export default function TableOrdersCard({ tableNumber, orders, billRequest, serv
   const grandTotal = orders.reduce((sum, o) => sum + o.totalPrice, 0);
   const hasPendingBillRequest = billRequest?.status === "pending";
   const hasPendingServerCall = serverCall?.status === "pending";
+  const isFlagged = !!flag;
 
   const handleQuantityChange = async (order, itemIndex, newQuantity) => {
     try {
@@ -98,16 +109,35 @@ export default function TableOrdersCard({ tableNumber, orders, billRequest, serv
   };
 
   return (
-    <div style={{ ...styles.card, ...(hasPendingServerCall ? styles.cardUrgent : {}) }}>
+    <div
+      style={{
+        ...styles.card,
+        ...(hasPendingServerCall ? styles.cardUrgent : {}),
+        ...(isFlagged && !hasPendingServerCall ? styles.cardFlagged : {}),
+      }}
+    >
       <div style={styles.cardHeader}>
         <h3 style={styles.tableTitle}>Table {tableNumber}</h3>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            onClick={onToggleFlag}
+            style={{ ...styles.flagBtn, ...(isFlagged ? styles.flagBtnActive : {}) }}
+            title={isFlagged ? "Remove flag" : "Flag this table"}
+          >
+            🚩
+          </button>
           <span style={styles.grandTotal}>${grandTotal.toFixed(2)}</span>
           <button onClick={() => setAddOrderOpen(true)} style={styles.addOrderBtn}>
             + Add Order
           </button>
         </div>
       </div>
+
+      {isFlagged && (
+        <div style={styles.flagBanner}>
+          <span style={styles.flagBannerText}>🚩 {flag.note ? flag.note : "Flagged"}</span>
+        </div>
+      )}
 
       {hasPendingServerCall && (
         <div style={styles.callBanner}>
@@ -125,6 +155,13 @@ export default function TableOrdersCard({ tableNumber, orders, billRequest, serv
           <button onClick={handleAcknowledgeBill} style={styles.acknowledgeBtn}>
             Mark Handled
           </button>
+        </div>
+      )}
+
+      {orders.length === 0 && isOccupied && (
+        <div style={styles.occupiedEmptyState}>
+          <span style={{ fontSize: 13 }}>👋</span>
+          <span style={styles.occupiedEmptyText}>Seated, no orders yet</span>
         </div>
       )}
 
@@ -236,6 +273,57 @@ const styles = {
   cardUrgent: {
     border: `1px solid ${theme.color.danger}60`,
     boxShadow: `0 0 0 1px ${theme.color.danger}20, 0 8px 24px rgba(239,68,68,0.08)`,
+  },
+  cardFlagged: {
+    border: `1px solid ${theme.color.warning}60`,
+    boxShadow: `0 0 0 1px ${theme.color.warning}20`,
+  },
+  flagBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.border}`,
+    background: "rgba(255,255,255,0.03)",
+    fontSize: 14,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    opacity: 0.5,
+    flexShrink: 0,
+  },
+  flagBtnActive: {
+    border: `1px solid ${theme.color.warning}`,
+    background: theme.color.warningBg,
+    opacity: 1,
+  },
+  flagBanner: {
+    background: theme.color.warningBg,
+    border: `1px solid ${theme.color.warning}40`,
+    borderRadius: theme.radius.sm,
+    padding: "8px 12px",
+    marginBottom: 10,
+  },
+  flagBannerText: {
+    fontFamily: theme.font.body,
+    fontSize: 12,
+    fontWeight: 700,
+    color: theme.color.warning,
+  },
+  occupiedEmptyState: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "12px 14px",
+    background: "rgba(255,255,255,0.02)",
+    border: `1px dashed ${theme.color.border}`,
+    borderRadius: theme.radius.sm,
+    marginBottom: 4,
+  },
+  occupiedEmptyText: {
+    fontFamily: theme.font.body,
+    fontSize: 12,
+    color: theme.color.textFaint,
   },
   cardHeader: {
     display: "flex",

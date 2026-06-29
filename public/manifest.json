@@ -1,0 +1,17 @@
+{
+  "name": "Bar System",
+  "short_name": "BarSystem",
+  "description": "Tablet ordering, menu, and table management system.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#0a0c10",
+  "theme_color": "#0a0c10",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

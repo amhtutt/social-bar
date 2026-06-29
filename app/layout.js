@@ -4,6 +4,16 @@ import Providers from "./providers";
 export const metadata = {
   title: process.env.NEXT_PUBLIC_VENUE_NAME || "Bar System",
   description: "Tablet-based ordering, menu, and table system.",
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: process.env.NEXT_PUBLIC_VENUE_NAME || "Bar System",
+  },
 };
 
 export const viewport = {

@@ -24,6 +24,8 @@ const ACTION_LABELS = {
   menu_item_updated: { label: "Menu Item Updated", color: theme.color.info },
   menu_item_price_changed: { label: "Price Changed", color: theme.color.warning },
   menu_item_deleted: { label: "Menu Item Deleted", color: theme.color.danger },
+  menu_items_bulk_available: { label: "Bulk: Marked Available", color: theme.color.accent },
+  menu_items_bulk_unavailable: { label: "Bulk: Marked Unavailable", color: theme.color.warning },
   price_validation_failed: { label: "⚠ Price Mismatch", color: theme.color.danger },
 };
 

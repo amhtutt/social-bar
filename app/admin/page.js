@@ -18,6 +18,7 @@ import CategoryManager from "@/components/admin/CategoryManager";
 import ItemManager from "@/components/admin/ItemManager";
 import StaffManager from "@/components/admin/StaffManager";
 import PricingSettings from "@/components/admin/PricingSettings";
+import StagingBanner from "@/components/StagingBanner";
 
 const TABS = [
   { id: "categories", label: "Categories" },
@@ -35,17 +36,21 @@ export default function AdminPage() {
 }
 
 function AdminPageContent() {
-  const { profile } = useAuth();
+  const { profile, venueId } = useAuth();
   const [activeTab, setActiveTab] = useState("categories");
 
   return (
     <div style={styles.page}>
+      <StagingBanner />
       <header style={styles.header}>
         <div>
           <h1 style={styles.title}>Menu Editor</h1>
           <p style={styles.subtitle}>Manage categories, items, and staff accounts.</p>
         </div>
         <div style={styles.userArea}>
+          <a href={`/?venue=${venueId}`} target="_blank" rel="noopener noreferrer" style={styles.previewLink}>
+            👁 Preview Menu
+          </a>
           <Link href="/staff" style={styles.floorViewLink}>
             Floor View →
           </Link>
@@ -120,6 +125,14 @@ const styles = {
     fontSize: 13,
     color: theme.color.accent,
     textDecoration: "none",
+  },
+  previewLink: {
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 13,
+    color: theme.color.textSecondary,
+    textDecoration: "none",
+    whiteSpace: "nowrap",
   },
   userEmail: {
     fontFamily: theme.font.body,
