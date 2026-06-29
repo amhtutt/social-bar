@@ -10,6 +10,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
 import { useAuth } from "@/lib/AuthContext";
 import { signOut } from "@/lib/userService";
 import { subscribeToVenueOrders, subscribeToVenueBillRequests } from "@/lib/orderService";
@@ -18,6 +19,7 @@ import { theme } from "@/lib/theme";
 import AdminGuard from "@/components/admin/AdminGuard";
 import TableOrdersCard from "@/components/staff/TableOrdersCard";
 import ActivityLogPanel from "@/components/staff/ActivityLogPanel";
+import StagingBanner from "@/components/StagingBanner";
 
 const TABS = [
   { id: "floor", label: "Floor View" },
@@ -122,6 +124,7 @@ function StaffPageContent() {
 
   return (
     <div style={styles.page}>
+      <StagingBanner />
       <style>{`@keyframes shimmerSweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }`}</style>
 
       <header style={styles.header}>
@@ -139,6 +142,9 @@ function StaffPageContent() {
           </p>
         </div>
         <div style={styles.userArea}>
+          <Link href="/kitchen" style={styles.kitchenLink}>
+            🍳 Kitchen
+          </Link>
           <span style={styles.userEmail}>
             {profile?.email} <span style={styles.roleTag}>{profile?.role}</span>
           </span>
@@ -267,6 +273,14 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: 12,
+  },
+  kitchenLink: {
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 13,
+    color: theme.color.accent,
+    textDecoration: "none",
+    whiteSpace: "nowrap",
   },
   userEmail: {
     fontFamily: theme.font.body,
