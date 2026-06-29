@@ -28,6 +28,7 @@ import { subscribeToVenueOrders } from "@/lib/orderService";
 import { theme } from "@/lib/theme";
 import AdminGuard from "@/components/admin/AdminGuard";
 import StagingBanner from "@/components/StagingBanner";
+import ConfirmDialog from "@/components/admin/ConfirmDialog";
 
 const NEW_TICKET_THRESHOLD_MIN = 5;
 const URGENT_THRESHOLD_MIN = 10;
@@ -94,7 +95,7 @@ function Shimmer() {
   );
 }
 
-function KitchenTicket({ order, onDismiss }) {
+function KitchenTicket({ order, onRequestDismiss }) {
   const timeLabel = order.createdAt
     ? order.createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "—";
@@ -134,14 +135,14 @@ function KitchenTicket({ order, onDismiss }) {
 
       {order.source === "staff" && <p style={styles.staffTag}>Added by staff</p>}
 
-      <button onClick={() => onDismiss(order.id)} style={styles.dismissBtn}>
+      <button onClick={() => onRequestDismiss(order)} style={styles.dismissBtn}>
         Dismiss
       </button>
     </div>
   );
 }
 
-function TicketSection({ title, count, accentColor, orders, onDismiss }) {
+function TicketSection({ title, count, accentColor, orders, onRequestDismiss }) {
   if (orders.length === 0) return null;
   return (
     <div style={{ marginBottom: 28 }}>
@@ -151,7 +152,7 @@ function TicketSection({ title, count, accentColor, orders, onDismiss }) {
       </div>
       <div style={styles.grid}>
         {orders.map((order) => (
-          <KitchenTicket key={order.id} order={order} onDismiss={onDismiss} />
+          <KitchenTicket key={order.id} order={order} onRequestDismiss={onRequestDismiss} />
         ))}
       </div>
     </div>
@@ -206,13 +207,17 @@ function KitchenPageContent() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleDismiss = (orderId) => {
+  const [dismissTarget, setDismissTarget] = useState(null);
+
+  const handleConfirmDismiss = () => {
+    if (!dismissTarget) return;
     setDismissedIds((prev) => {
       const next = new Set(prev);
-      next.add(orderId);
+      next.add(dismissTarget.id);
       saveDismissedIds(next);
       return next;
     });
+    setDismissTarget(null);
   };
 
   const visibleOrders = useMemo(() => {
@@ -296,18 +301,30 @@ function KitchenPageContent() {
               count={newOrders.length}
               accentColor={theme.color.accent}
               orders={newOrders}
-              onDismiss={handleDismiss}
+              onRequestDismiss={setDismissTarget}
             />
             <TicketSection
               title="OLDER"
               count={olderOrders.length}
               accentColor={theme.color.warning}
               orders={olderOrders}
-              onDismiss={handleDismiss}
+              onRequestDismiss={setDismissTarget}
             />
           </>
         )}
       </main>
+
+      <ConfirmDialog
+        open={!!dismissTarget}
+        onClose={() => setDismissTarget(null)}
+        onConfirm={handleConfirmDismiss}
+        title="Dismiss Ticket"
+        message={
+          dismissTarget
+            ? `Dismiss Table ${dismissTarget.tableNumber}'s ticket? This only removes it from THIS kitchen screen — it does not mark the order as served, and it will not reappear unless this screen is refreshed and the dismissal is cleared.`
+            : ""
+        }
+      />
     </div>
   );
 }
