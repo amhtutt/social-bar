@@ -26,9 +26,9 @@ import admin from "firebase-admin";
 
 // CONFIG — edit these before running
 const CONFIG = {
-  venueName: "Your Venue Name",
-  adminEmail: "you@example.com",
-  adminPassword: "change-this-password",
+  venueName: "staging-test",
+  adminEmail: "staging-admin@test.com",
+  adminPassword: "stagingTest123!",
 };
 
 const __filename = fileURLToPath(import.meta.url);
