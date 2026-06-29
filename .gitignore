@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# Environment variables — contains Firebase config, never commit
+.env
+.env.local
+.env.*.local
+
+# Firebase service account keys — NEVER commit these
+scripts/serviceAccountKey.json
+**/serviceAccountKey*.json
+*-firebase-adminsdk-*.json
+
+# Editor/OS
+.DS_Store
+.vscode/
+*.log
+
+# Vercel
+.vercel
+.env*.local
