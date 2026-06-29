@@ -119,18 +119,27 @@ function KitchenTicket({ order, onRequestDismiss }) {
       </div>
 
       <div style={styles.itemList}>
-        {order.items.map((item, i) => (
-          <div key={i} style={styles.itemRow}>
-            <span style={styles.itemQty}>{item.quantity}×</span>
-            <div style={{ flex: 1 }}>
-              <span style={styles.itemName}>{item.name_en}</span>
-              {item.selectedModifiers?.length > 0 && (
-                <p style={styles.modifierLine}>{item.selectedModifiers.map((m) => m.optionName_en).join(", ")}</p>
-              )}
-              {item.specialInstructions && <p style={styles.instructionsLine}>⚠ {item.specialInstructions}</p>}
+        {order.items.map((item, i) => {
+          // Visually group consecutive lines of the SAME dish (e.g. two
+          // burgers ordered with different modifiers) with a thin
+          // connecting divider, rather than letting them look like two
+          // unrelated items — easier to scan when a table orders
+          // multiple variants of one thing.
+          const isSameAsPrevious = i > 0 && order.items[i - 1].name_en === item.name_en;
+
+          return (
+            <div key={i} style={{ ...styles.itemRow, ...(isSameAsPrevious ? styles.itemRowGrouped : {}) }}>
+              <span style={styles.itemQty}>{item.quantity}×</span>
+              <div style={{ flex: 1 }}>
+                <span style={styles.itemName}>{item.name_en}</span>
+                {item.selectedModifiers?.length > 0 && (
+                  <p style={styles.modifierLine}>{item.selectedModifiers.map((m) => m.optionName_en).join(", ")}</p>
+                )}
+                {item.specialInstructions && <p style={styles.instructionsLine}>⚠ {item.specialInstructions}</p>}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {order.source === "staff" && <p style={styles.staffTag}>Added by staff</p>}
@@ -498,6 +507,11 @@ const styles = {
     display: "flex",
     gap: 10,
     alignItems: "flex-start",
+  },
+  itemRowGrouped: {
+    marginTop: -4,
+    paddingTop: 6,
+    borderTop: `1px dashed ${theme.color.border}`,
   },
   itemQty: {
     fontFamily: theme.font.display,

@@ -19,13 +19,17 @@
 import { useState } from "react";
 import {
   removeItemFromOrder,
+  restoreRemovedItem,
   updateItemQuantity,
   voidOrder,
+  restoreVoidedOrder,
   acknowledgeBillRequest,
+  closeTab,
 } from "@/lib/orderService";
 import { acknowledgeServerCall } from "@/lib/callServerService";
 import { theme } from "@/lib/theme";
 import ConfirmDialog from "@/components/admin/ConfirmDialog";
+import UndoToast from "@/components/UndoToast";
 import StaffOrderModal from "./StaffOrderModal";
 
 export default function TableOrdersCard({
@@ -42,7 +46,17 @@ export default function TableOrdersCard({
   const [removeTarget, setRemoveTarget] = useState(null);
   const [voidTarget, setVoidTarget] = useState(null);
   const [addOrderOpen, setAddOrderOpen] = useState(false);
+  const [closeTabConfirmOpen, setCloseTabConfirmOpen] = useState(false);
+  const [closingTab, setClosingTab] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  // Undo state for the two genuinely destructive actions on this card —
+  // removing an item or voiding a whole order. Both delete real data
+  // (unlike menu item/category delete, which is already a soft-delete),
+  // so undo here means re-creating the order from a snapshot captured
+  // right before the action ran.
+  const [undoRemove, setUndoRemove] = useState(null); // { orderId, previousOrderSnapshot } | null
+  const [undoVoid, setUndoVoid] = useState(null); // { orderId, voidedOrderSnapshot } | null
 
   const grandTotal = orders.reduce((sum, o) => sum + o.totalPrice, 0);
   const hasPendingBillRequest = billRequest?.status === "pending";
@@ -61,6 +75,9 @@ export default function TableOrdersCard({
     if (!removeTarget) return;
     setBusy(true);
     try {
+      // Snapshot the FULL order before mutating it — this is what undo
+      // restores to, not just the removed item in isolation.
+      const previousOrderSnapshot = removeTarget.order;
       await removeItemFromOrder(
         removeTarget.orderId,
         removeTarget.order,
@@ -69,6 +86,7 @@ export default function TableOrdersCard({
         tableNumber,
         actor
       );
+      setUndoRemove({ orderId: removeTarget.orderId, previousOrderSnapshot });
       setRemoveTarget(null);
     } catch (err) {
       console.error("[TableOrdersCard] removeItemFromOrder failed:", err);
@@ -77,16 +95,40 @@ export default function TableOrdersCard({
     }
   };
 
+  const handleUndoRemove = async () => {
+    if (!undoRemove) return;
+    try {
+      await restoreRemovedItem(undoRemove.orderId, undoRemove.previousOrderSnapshot, actor);
+    } catch (err) {
+      console.error("[TableOrdersCard] restoreRemovedItem failed:", err);
+    } finally {
+      setUndoRemove(null);
+    }
+  };
+
   const handleConfirmVoid = async () => {
     if (!voidTarget) return;
     setBusy(true);
     try {
+      const voidedOrderSnapshot = voidTarget.order;
       await voidOrder(voidTarget.orderId, venueId, tableNumber, actor, voidTarget.summary);
+      setUndoVoid({ orderId: voidTarget.orderId, voidedOrderSnapshot });
       setVoidTarget(null);
     } catch (err) {
       console.error("[TableOrdersCard] voidOrder failed:", err);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleUndoVoid = async () => {
+    if (!undoVoid) return;
+    try {
+      await restoreVoidedOrder(undoVoid.orderId, undoVoid.voidedOrderSnapshot, actor);
+    } catch (err) {
+      console.error("[TableOrdersCard] restoreVoidedOrder failed:", err);
+    } finally {
+      setUndoVoid(null);
     }
   };
 
@@ -105,6 +147,18 @@ export default function TableOrdersCard({
       await acknowledgeServerCall(serverCall.id, venueId, tableNumber, actor);
     } catch (err) {
       console.error("[TableOrdersCard] acknowledgeServerCall failed:", err);
+    }
+  };
+
+  const handleConfirmCloseTab = async () => {
+    setClosingTab(true);
+    try {
+      await closeTab({ venueId, tableNumber, actor });
+      setCloseTabConfirmOpen(false);
+    } catch (err) {
+      console.error("[TableOrdersCard] closeTab failed:", err);
+    } finally {
+      setClosingTab(false);
     }
   };
 
@@ -127,6 +181,11 @@ export default function TableOrdersCard({
             🚩
           </button>
           <span style={styles.grandTotal}>${grandTotal.toFixed(2)}</span>
+          {orders.length > 0 && (
+            <button onClick={() => setCloseTabConfirmOpen(true)} style={styles.closeTabBtn}>
+              Close Tab
+            </button>
+          )}
           <button onClick={() => setAddOrderOpen(true)} style={styles.addOrderBtn}>
             + Add Order
           </button>
@@ -182,6 +241,7 @@ export default function TableOrdersCard({
                   onClick={() =>
                     setVoidTarget({
                       orderId: order.id,
+                      order,
                       summary: `${order.items.length} item${order.items.length === 1 ? "" : "s"}, $${order.totalPrice.toFixed(2)}`,
                     })
                   }
@@ -237,7 +297,7 @@ export default function TableOrdersCard({
         title="Remove Item"
         message={
           removeTarget
-            ? `Remove "${removeTarget.name}" from this order? This updates the table's bill immediately and is logged.`
+            ? `Remove "${removeTarget.name}" from this order? This updates the table's bill immediately and is logged. You'll have a few seconds to undo right after.`
             : ""
         }
       />
@@ -248,7 +308,16 @@ export default function TableOrdersCard({
         onConfirm={handleConfirmVoid}
         confirming={busy}
         title="Void Order"
-        message="Void this entire order? It will be removed from the table's bill completely and logged. This cannot be undone."
+        message="Void this entire order? It will be removed from the table's bill immediately and logged. You'll have a few seconds to undo right after."
+      />
+
+      <ConfirmDialog
+        open={closeTabConfirmOpen}
+        onClose={() => setCloseTabConfirmOpen(false)}
+        onConfirm={handleConfirmCloseTab}
+        confirming={closingTab}
+        title="Close Tab"
+        message={`Confirm you've collected payment of $${grandTotal.toFixed(2)} for Table ${tableNumber}. This closes out all ${orders.length} order${orders.length === 1 ? "" : "s"} and resets the table's bill for the next round.`}
       />
 
       <StaffOrderModal
@@ -258,6 +327,12 @@ export default function TableOrdersCard({
         tableNumber={tableNumber}
         actor={actor}
       />
+
+      {undoRemove && (
+        <UndoToast message="Item removed" onUndo={handleUndoRemove} onExpire={() => setUndoRemove(null)} />
+      )}
+
+      {undoVoid && <UndoToast message="Order voided" onUndo={handleUndoVoid} onExpire={() => setUndoVoid(null)} />}
     </div>
   );
 }
@@ -354,6 +429,18 @@ const styles = {
     color: theme.color.bg,
     fontFamily: theme.font.display,
     fontWeight: 800,
+    fontSize: 11,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  closeTabBtn: {
+    padding: "6px 12px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.borderStrong}`,
+    background: "rgba(255,255,255,0.04)",
+    color: theme.color.textPrimary,
+    fontFamily: theme.font.display,
+    fontWeight: 700,
     fontSize: 11,
     cursor: "pointer",
     whiteSpace: "nowrap",

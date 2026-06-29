@@ -15,10 +15,13 @@ import { theme } from "@/lib/theme";
 
 const ACTION_LABELS = {
   item_removed: { label: "Item Removed", color: theme.color.danger },
+  item_removal_undone: { label: "↩ Item Restored", color: theme.color.accent },
   item_quantity_changed: { label: "Quantity Changed", color: theme.color.warning },
   order_voided: { label: "Order Voided", color: theme.color.danger },
+  order_void_undone: { label: "↩ Order Restored", color: theme.color.accent },
   order_created: { label: "Order Added", color: theme.color.accent },
   bill_acknowledged: { label: "Bill Acknowledged", color: theme.color.info },
+  tab_closed: { label: "✓ Tab Closed", color: theme.color.accent },
   server_call_acknowledged: { label: "Call Acknowledged", color: theme.color.info },
   menu_item_created: { label: "Menu Item Added", color: theme.color.accent },
   menu_item_updated: { label: "Menu Item Updated", color: theme.color.info },

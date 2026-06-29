@@ -13,12 +13,14 @@ import {
   createCategory,
   updateCategory,
   deleteCategory,
+  restoreCategory,
 } from "@/lib/menuService";
 import { useAuth } from "@/lib/AuthContext";
 import { theme } from "@/lib/theme";
 import Modal from "./Modal";
 import ConfirmDialog from "./ConfirmDialog";
 import { Field, TextInput, Checkbox } from "./FormField";
+import UndoToast from "@/components/UndoToast";
 
 const EMPTY_FORM = { name_en: "", name_mm: "", icon: "🍽️", sortOrder: 0, isFeaturedCategory: false };
 
@@ -91,16 +93,30 @@ export default function CategoryManager() {
     }
   };
 
+  const [undoTarget, setUndoTarget] = useState(null); // { id, name_en } | null
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
     try {
       await deleteCategory(deleteTarget.id);
+      setUndoTarget({ id: deleteTarget.id, name_en: deleteTarget.name_en });
       setDeleteTarget(null);
     } catch (err) {
       console.error("[CategoryManager] delete failed:", err);
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleUndoDelete = async () => {
+    if (!undoTarget) return;
+    try {
+      await restoreCategory(undoTarget.id);
+    } catch (err) {
+      console.error("[CategoryManager] restore failed:", err);
+    } finally {
+      setUndoTarget(null);
     }
   };
 
@@ -196,6 +212,14 @@ export default function CategoryManager() {
             : ""
         }
       />
+
+      {undoTarget && (
+        <UndoToast
+          message={`Deleted "${undoTarget.name_en}"`}
+          onUndo={handleUndoDelete}
+          onExpire={() => setUndoTarget(null)}
+        />
+      )}
     </div>
   );
 }

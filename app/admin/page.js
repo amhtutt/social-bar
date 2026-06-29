@@ -12,6 +12,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/AuthContext";
 import { signOut } from "@/lib/userService";
+import { exportMenuToJson } from "@/lib/menuService";
 import { theme } from "@/lib/theme";
 import AdminGuard from "@/components/admin/AdminGuard";
 import CategoryManager from "@/components/admin/CategoryManager";
@@ -38,6 +39,28 @@ export default function AdminPage() {
 function AdminPageContent() {
   const { profile, venueId } = useAuth();
   const [activeTab, setActiveTab] = useState("categories");
+  const [exporting, setExporting] = useState(false);
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const data = await exportMenuToJson(venueId);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const dateStamp = new Date().toISOString().slice(0, 10);
+      a.download = `menu-export-${dateStamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("[AdminPage] Menu export failed:", err);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div style={styles.page}>
@@ -48,6 +71,9 @@ function AdminPageContent() {
           <p style={styles.subtitle}>Manage categories, items, and staff accounts.</p>
         </div>
         <div style={styles.userArea}>
+          <button onClick={handleExport} disabled={exporting} style={styles.exportBtn}>
+            {exporting ? "Exporting…" : "⬇ Export Menu"}
+          </button>
           <a href={`/?venue=${venueId}`} target="_blank" rel="noopener noreferrer" style={styles.previewLink}>
             👁 Preview Menu
           </a>
@@ -132,6 +158,18 @@ const styles = {
     fontSize: 13,
     color: theme.color.textSecondary,
     textDecoration: "none",
+    whiteSpace: "nowrap",
+  },
+  exportBtn: {
+    padding: "8px 14px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.border}`,
+    background: "rgba(255,255,255,0.03)",
+    color: theme.color.textSecondary,
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 13,
+    cursor: "pointer",
     whiteSpace: "nowrap",
   },
   userEmail: {

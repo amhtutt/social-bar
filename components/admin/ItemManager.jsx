@@ -17,6 +17,7 @@ import {
   createMenuItem,
   updateMenuItem,
   deleteMenuItem,
+  restoreMenuItem,
   isValidImageUrl,
 } from "@/lib/menuService";
 import { logActivity } from "@/lib/activityLogService";
@@ -27,6 +28,7 @@ import ConfirmDialog from "./ConfirmDialog";
 import { Field, TextInput, TextArea, Checkbox } from "./FormField";
 import ModifierGroupsEditor from "./ModifierGroupsEditor";
 import ComboItemsEditor from "./ComboItemsEditor";
+import UndoToast from "@/components/UndoToast";
 
 // Swallow logging errors so a failed audit-log write never blocks the
 // actual menu mutation it's describing — same pattern as orderService.js.
@@ -280,6 +282,8 @@ export default function ItemManager() {
     }
   };
 
+  const [undoTarget, setUndoTarget] = useState(null); // { id, name_en } | null
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
@@ -293,11 +297,34 @@ export default function ItemManager() {
         tableNumber: null,
         details: `Deleted "${deleteTarget.name_en}"`,
       });
+      // Show an undo toast rather than treating this as instantly final
+      // — deleteMenuItem() is already a soft-delete, so "undo" is just
+      // clearing deletedAt again within this grace window.
+      setUndoTarget({ id: deleteTarget.id, name_en: deleteTarget.name_en });
       setDeleteTarget(null);
     } catch (err) {
       console.error("[ItemManager] delete failed:", err);
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleUndoDelete = async () => {
+    if (!undoTarget) return;
+    try {
+      await restoreMenuItem(undoTarget.id);
+      await safeLog({
+        venueId,
+        actorEmail: profile?.email,
+        actorRole: profile?.role,
+        action: "menu_item_updated",
+        tableNumber: null,
+        details: `Restored "${undoTarget.name_en}" after delete`,
+      });
+    } catch (err) {
+      console.error("[ItemManager] restore failed:", err);
+    } finally {
+      setUndoTarget(null);
     }
   };
 
@@ -513,8 +540,16 @@ export default function ItemManager() {
         onConfirm={handleDelete}
         confirming={deleting}
         title="Delete Item"
-        message={deleteTarget ? `Delete "${deleteTarget.name_en}"? This cannot be undone.` : ""}
+        message={deleteTarget ? `Delete "${deleteTarget.name_en}"? You'll have a few seconds to undo right after.` : ""}
       />
+
+      {undoTarget && (
+        <UndoToast
+          message={`Deleted "${undoTarget.name_en}"`}
+          onUndo={handleUndoDelete}
+          onExpire={() => setUndoTarget(null)}
+        />
+      )}
     </div>
   );
 }

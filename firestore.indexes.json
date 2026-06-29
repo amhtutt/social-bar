@@ -35,6 +35,15 @@
       ]
     },
     {
+      "collectionGroup": "billRequests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "venueId", "order": "ASCENDING" },
+        { "fieldPath": "tableNumber", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "serverCalls",
       "queryScope": "COLLECTION",
       "fields": [
