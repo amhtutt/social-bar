@@ -25,6 +25,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect, useRef, useMemo } from "react";
+import Link from "next/link";
 import { useAuth } from "@/lib/AuthContext";
 import { signOut } from "@/lib/userService";
 import {
@@ -304,6 +305,19 @@ function KitchenPageContent() {
         <h1 style={styles.title}>🍳 Kitchen</h1>
         <div style={styles.headerRight}>
           <span style={styles.ticketCount}>{isLoading ? "" : `${activeCount} active`}</span>
+          {/* Kitchen-only accounts stay locked to this screen — Floor View
+              and Menu Editor require FOH/admin under firestore.rules, so
+              a kitchen-role account would just hit Access Denied anyway. */}
+          {(profile?.role === "admin" || profile?.role === "staff") && (
+            <Link href="/staff" style={styles.floorViewLink}>
+              🏠 Floor View
+            </Link>
+          )}
+          {profile?.role === "admin" && (
+            <Link href="/admin" style={styles.menuEditorLink}>
+              📋 Menu Editor
+            </Link>
+          )}
           <span style={styles.userEmail}>{profile?.email}</span>
           <button onClick={() => signOut()} style={styles.signOutBtn}>
             Sign Out
@@ -438,6 +452,38 @@ const styles = {
     fontWeight: 700,
     fontSize: 15,
     color: theme.color.accent,
+  },
+  floorViewLink: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "8px 14px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.accentBorder}`,
+    background: theme.color.accentBg,
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 13,
+    color: theme.color.accent,
+    textDecoration: "none",
+    whiteSpace: "nowrap",
+    cursor: "pointer",
+  },
+  menuEditorLink: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "8px 14px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.border}`,
+    background: "rgba(255,255,255,0.03)",
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 13,
+    color: theme.color.textSecondary,
+    textDecoration: "none",
+    whiteSpace: "nowrap",
+    cursor: "pointer",
   },
   userEmail: {
     fontFamily: theme.font.body,

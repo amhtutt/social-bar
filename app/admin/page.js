@@ -78,7 +78,10 @@ function AdminPageContent() {
             👁 Preview Menu
           </a>
           <Link href="/staff" style={styles.floorViewLink}>
-            Floor View →
+            🏠 Floor View
+          </Link>
+          <Link href="/kitchen" style={styles.kitchenLink}>
+            🍳 Kitchen
           </Link>
           <span style={styles.userEmail}>{profile?.email}</span>
           <button onClick={() => signOut()} style={styles.signOutBtn}>
@@ -146,11 +149,36 @@ const styles = {
     gap: 12,
   },
   floorViewLink: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "8px 14px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.accentBorder}`,
+    background: theme.color.accentBg,
     fontFamily: theme.font.display,
     fontWeight: 700,
     fontSize: 13,
     color: theme.color.accent,
     textDecoration: "none",
+    whiteSpace: "nowrap",
+    cursor: "pointer",
+  },
+  kitchenLink: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "8px 14px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.border}`,
+    background: "rgba(255,255,255,0.03)",
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 13,
+    color: theme.color.textSecondary,
+    textDecoration: "none",
+    whiteSpace: "nowrap",
+    cursor: "pointer",
   },
   previewLink: {
     fontFamily: theme.font.display,
