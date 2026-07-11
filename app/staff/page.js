@@ -1,12 +1,12 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// app/staff/page.js  —  Server/Manager dashboard
+// app/staff/page.js  —  Front-of-house dashboard
 //
 // Two tabs: "Floor View" (tables grouped with their orders, edit/void/add
 // actions) and "Activity Log" (audit trail of every staff action, global
-// feed + per-table filter). Accessible to admin, manager, AND server
-// roles (unlike /admin, which is admin-only).
+// feed + per-table filter). Accessible to admin AND staff roles (unlike
+// /admin, which is admin-only, and /kitchen, which is kitchen-only).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect, useMemo } from "react";
@@ -29,7 +29,7 @@ const TABS = [
 
 export default function StaffPage() {
   return (
-    <AdminGuard requiredRoles={["admin", "manager", "server"]}>
+    <AdminGuard requiredRoles={["admin", "staff"]}>
       <StaffPageContent />
     </AdminGuard>
   );

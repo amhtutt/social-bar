@@ -193,9 +193,9 @@ service cloud.firestore {
     //     write priceValidation.
     //   • staff: for their own venue (covers createOrderForTable and
     //     the restore/undo setDoc re-creations; priceValidation may
-    //     pass through on restores — harmless, because
-    //     validateOrderOnCreate re-derives and overwrites it on every
-    //     create anyway).
+    //     pass through on restores — harmless, because only the
+    //     scheduled sweep function (Admin SDK, bypasses these rules)
+    //     ever authors a value that sticks).
     // Update: FOH freely except protected fields; kitchen only
     //         status/updatedAt. Customers never update orders —
     //         idempotent re-submits are handled client-side (see

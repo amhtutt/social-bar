@@ -7,7 +7,7 @@
 import Modal from "./Modal";
 import { theme } from "@/lib/theme";
 
-export default function ConfirmDialog({ open, onClose, onConfirm, title, message, confirming }) {
+export default function ConfirmDialog({ open, onClose, onConfirm, title, message, confirming, confirmLabel }) {
   return (
     <Modal open={open} onClose={onClose} title={title} maxWidth={400}>
       <p style={styles.message}>{message}</p>
@@ -16,7 +16,7 @@ export default function ConfirmDialog({ open, onClose, onConfirm, title, message
           Cancel
         </button>
         <button onClick={onConfirm} disabled={confirming} style={{ ...styles.deleteBtn, opacity: confirming ? 0.6 : 1 }}>
-          {confirming ? "Deleting…" : "Delete"}
+          {confirming ? (confirmLabel ? "Working…" : "Deleting…") : confirmLabel ?? "Delete"}
         </button>
       </div>
     </Modal>

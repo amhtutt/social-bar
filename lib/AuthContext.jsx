@@ -8,10 +8,16 @@
 //   2. That user's Firestore profile doc (role + venueId)
 //
 // Consumers get a single useAuth() hook returning:
-//   { user, profile, loading, isAdmin, isManager, isServer, isStaff }
+//   { user, profile, loading, isAdmin, isFOH, isKitchen, isStaff }
 //
-// "isStaff" is true for admin/manager/server — useful for route guards that
-// just need "any logged-in staff member", as opposed to admin-only screens.
+// These mirror firestore.rules' role-check functions 1:1 (isVenueAdmin,
+// isFOH, isKitchen, isVenueStaff) so a UI-level permission check never
+// silently drifts from what Firestore will actually allow:
+//   isAdmin — role === "admin"
+//   isFOH   — role === "admin" || "staff" (front-of-house: orders/bills,
+//             no menu edits) — what app/staff/page.js's AdminGuard requires
+//   isKitchen — role === "kitchen"
+//   isStaff — any of the above; "signed in as SOME employee of this venue"
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createContext, useContext, useState, useEffect } from "react";
@@ -59,10 +65,9 @@ export function AuthProvider({ children }) {
     role,
     venueId: profile?.venueId ?? null,
     isAdmin: role === "admin",
-    isManager: role === "manager",
-    isServer: role === "server",
+    isFOH: role === "admin" || role === "staff",
     isKitchen: role === "kitchen",
-    isStaff: role === "admin" || role === "manager" || role === "server" || role === "kitchen",
+    isStaff: role === "admin" || role === "staff" || role === "kitchen",
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

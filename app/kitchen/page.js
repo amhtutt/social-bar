@@ -4,27 +4,35 @@
 // app/kitchen/page.js  —  Kitchen Display System (KDS)
 //
 // Dedicated screen for a single tablet/monitor left running in the
-// kitchen. Still READ-ONLY with respect to order status (no
-// Preparing/Ready buttons) — that's a deliberate, deferred decision.
+// kitchen. Shows only PENDING orders (subscribeToVenueOrders already
+// filters out settled + cancelled; completed orders also leave the view).
 //
-// Three additions in this pass:
-//   1. Tickets split into "New" (under 5 min) and "Older" sections,
-//      instead of one long undifferentiated grid — urgency is grouped,
-//      not just color-coded per card.
-//   2. A short audible chime plays when a NEW order arrives, since
-//      kitchen staff are heads-down cooking, not watching the screen.
-//   3. A "Dismiss" button per ticket — LOCAL ONLY (localStorage on this
-//      device), does NOT touch order status in Firestore. This is
-//      intentionally not the same as marking an order "served" — it's
-//      just "stop showing me this on this kitchen screen." Dismissals do
-//      NOT sync across multiple kitchen screens, which is the correct
-//      tradeoff for a purely local "get this off my view" action.
+// Two REAL, Firestore-backed actions per ticket (this replaces the old
+// local-only "Dismiss" that just hid a ticket on one screen):
+//   • FINISHED  → markOrderCompleted(): order is made + delivered. Ticket
+//     leaves every kitchen screen (synced), STAYS on the customer's bill.
+//   • DISMISS   → cancelOrderFromKitchen(): can't/won't make it. Ticket
+//     leaves every kitchen screen AND drops off the bill and Floor View.
+//     Guarded by a confirm dialog (it costs the venue a sale), logged to
+//     the activity log, and reversible for a few seconds via an Undo bar.
+//
+// Both are status changes, never deletes — the record survives for shift
+// reports, and they fit the hardened security rules (kitchen role may
+// update only an order's status).
+//
+// Kept from before: New/Older sections, per-ticket urgency coloring, and
+// an audible chime when a genuinely new order arrives.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { signOut } from "@/lib/userService";
-import { subscribeToVenueOrders } from "@/lib/orderService";
+import {
+  subscribeToVenueOrders,
+  markOrderCompleted,
+  cancelOrderFromKitchen,
+  uncancelOrder,
+} from "@/lib/orderService";
 import { theme } from "@/lib/theme";
 import AdminGuard from "@/components/admin/AdminGuard";
 import StagingBanner from "@/components/StagingBanner";
@@ -32,32 +40,13 @@ import ConfirmDialog from "@/components/admin/ConfirmDialog";
 
 const NEW_TICKET_THRESHOLD_MIN = 5;
 const URGENT_THRESHOLD_MIN = 10;
-const DISMISSED_STORAGE_KEY = "kitchen_dismissed_order_ids";
-
-function loadDismissedIds() {
-  try {
-    const raw = localStorage.getItem(DISMISSED_STORAGE_KEY);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-function saveDismissedIds(idSet) {
-  try {
-    localStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify(Array.from(idSet)));
-  } catch {
-    // ignore — worst case, a dismissed ticket reappears after a refresh
-  }
-}
+const UNDO_WINDOW_MS = 6000;
 
 /**
  * playChime()
- * A short, simple two-tone beep using the Web Audio API directly —
- * avoids needing an audio file asset. Wrapped in try/catch since some
- * browsers block audio until a user interaction has occurred on the
- * page; failing silently is far better than crashing the whole screen
- * over a sound effect.
+ * A short two-tone beep via the Web Audio API — no audio asset needed.
+ * Wrapped in try/catch since some browsers block audio until a user
+ * interaction; failing silently beats crashing the screen over a sound.
  */
 function playChime() {
   try {
@@ -95,7 +84,7 @@ function Shimmer() {
   );
 }
 
-function KitchenTicket({ order, onRequestDismiss }) {
+function KitchenTicket({ order, onFinish, onRequestDismiss, busy }) {
   const timeLabel = order.createdAt
     ? order.createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "—";
@@ -120,13 +109,7 @@ function KitchenTicket({ order, onRequestDismiss }) {
 
       <div style={styles.itemList}>
         {order.items.map((item, i) => {
-          // Visually group consecutive lines of the SAME dish (e.g. two
-          // burgers ordered with different modifiers) with a thin
-          // connecting divider, rather than letting them look like two
-          // unrelated items — easier to scan when a table orders
-          // multiple variants of one thing.
           const isSameAsPrevious = i > 0 && order.items[i - 1].name_en === item.name_en;
-
           return (
             <div key={i} style={{ ...styles.itemRow, ...(isSameAsPrevious ? styles.itemRowGrouped : {}) }}>
               <span style={styles.itemQty}>{item.quantity}×</span>
@@ -144,14 +127,27 @@ function KitchenTicket({ order, onRequestDismiss }) {
 
       {order.source === "staff" && <p style={styles.staffTag}>Added by staff</p>}
 
-      <button onClick={() => onRequestDismiss(order)} style={styles.dismissBtn}>
-        Dismiss
-      </button>
+      <div style={styles.actionRow}>
+        <button
+          onClick={() => onRequestDismiss(order)}
+          disabled={busy}
+          style={{ ...styles.dismissBtn, ...(busy ? styles.btnDisabled : {}) }}
+        >
+          Dismiss
+        </button>
+        <button
+          onClick={() => onFinish(order)}
+          disabled={busy}
+          style={{ ...styles.finishBtn, ...(busy ? styles.btnDisabled : {}) }}
+        >
+          ✓ Finished
+        </button>
+      </div>
     </div>
   );
 }
 
-function TicketSection({ title, count, accentColor, orders, onRequestDismiss }) {
+function TicketSection({ title, count, accentColor, orders, onFinish, onRequestDismiss, busyId }) {
   if (orders.length === 0) return null;
   return (
     <div style={{ marginBottom: 28 }}>
@@ -161,7 +157,13 @@ function TicketSection({ title, count, accentColor, orders, onRequestDismiss }) 
       </div>
       <div style={styles.grid}>
         {orders.map((order) => (
-          <KitchenTicket key={order.id} order={order} onRequestDismiss={onRequestDismiss} />
+          <KitchenTicket
+            key={order.id}
+            order={order}
+            onFinish={onFinish}
+            onRequestDismiss={onRequestDismiss}
+            busy={busyId === order.id}
+          />
         ))}
       </div>
     </div>
@@ -170,15 +172,23 @@ function TicketSection({ title, count, accentColor, orders, onRequestDismiss }) 
 
 function KitchenPageContent() {
   const { profile, venueId } = useAuth();
+  const actor = useMemo(() => ({ email: profile?.email, role: profile?.role }), [profile]);
+
   const [orders, setOrders] = useState(null);
   const [error, setError] = useState(false);
-  const [dismissedIds, setDismissedIds] = useState(() => new Set());
+  const [busyId, setBusyId] = useState(null);
+  const [dismissTarget, setDismissTarget] = useState(null);
+  const [undo, setUndo] = useState(null); // { order, timeoutId }
+
   const knownOrderIdsRef = useRef(new Set());
   const isFirstSnapshotRef = useRef(true);
 
-  useEffect(() => {
-    setDismissedIds(loadDismissedIds());
-  }, []);
+  // Only PENDING orders belong on the kitchen screen. Completed orders
+  // stay on the bill but are done cooking; cancelled/settled are already
+  // filtered out upstream by subscribeToVenueOrders. Filtered once here,
+  // at the subscription boundary — `orders` state is never consumed
+  // unfiltered, so there's no reason to re-filter it downstream.
+  const kitchenOrders = orders;
 
   useEffect(() => {
     if (!venueId) return;
@@ -190,65 +200,100 @@ function KitchenPageContent() {
         return;
       }
 
-      const sorted = [...data].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+      const pending = data.filter((o) => o.status === "pending");
 
-      // Play a chime if any order in this snapshot is one we haven't seen
-      // before — but never on the very first snapshot after page load
-      // (otherwise every pre-existing order would chime at once on open).
+      // Chime if this snapshot contains a pending order we haven't seen —
+      // but never on the first snapshot after load.
       if (!isFirstSnapshotRef.current) {
-        const hasNewOrder = sorted.some((o) => !knownOrderIdsRef.current.has(o.id));
+        const hasNewOrder = pending.some((o) => !knownOrderIdsRef.current.has(o.id));
         if (hasNewOrder) playChime();
       }
       isFirstSnapshotRef.current = false;
-      knownOrderIdsRef.current = new Set(sorted.map((o) => o.id));
+      knownOrderIdsRef.current = new Set(pending.map((o) => o.id));
 
       setError(false);
-      setOrders(sorted);
+      setOrders(pending);
     });
     return () => unsub();
   }, [venueId]);
 
-  // Re-render every 30s purely so "Xm ago" / urgency / new-vs-older
-  // grouping stays accurate without requiring a new Firestore snapshot.
+  // Re-render every 30s so "Xm ago" / urgency / section grouping stay
+  // accurate without needing a new Firestore snapshot.
   const [, forceTick] = useState(0);
   useEffect(() => {
     const interval = setInterval(() => forceTick((n) => n + 1), 30000);
     return () => clearInterval(interval);
   }, []);
 
-  const [dismissTarget, setDismissTarget] = useState(null);
+  // Clear any pending undo timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (undo?.timeoutId) clearTimeout(undo.timeoutId);
+    };
+  }, [undo]);
 
-  const handleConfirmDismiss = () => {
-    if (!dismissTarget) return;
-    setDismissedIds((prev) => {
-      const next = new Set(prev);
-      next.add(dismissTarget.id);
-      saveDismissedIds(next);
-      return next;
-    });
-    setDismissTarget(null);
+  const orderInfo = (o) => ({ venueId, tableNumber: o.tableNumber, orderNumber: o.orderNumber });
+
+  const handleFinish = async (order) => {
+    setBusyId(order.id);
+    try {
+      await markOrderCompleted(order.id, orderInfo(order), actor);
+    } catch (err) {
+      console.error("[KitchenPage] Finish failed:", err);
+      setError(true);
+    } finally {
+      setBusyId(null);
+    }
   };
 
-  const visibleOrders = useMemo(() => {
-    if (!orders) return [];
-    return orders.filter((o) => !dismissedIds.has(o.id));
-  }, [orders, dismissedIds]);
+  const handleConfirmDismiss = async () => {
+    const order = dismissTarget;
+    setDismissTarget(null);
+    if (!order) return;
+
+    setBusyId(order.id);
+    try {
+      await cancelOrderFromKitchen(order.id, orderInfo(order), actor);
+      // Offer a brief undo. The order has already left the screen (it's no
+      // longer pending), so the undo lives in a bottom bar.
+      const timeoutId = setTimeout(() => setUndo(null), UNDO_WINDOW_MS);
+      setUndo({ order, timeoutId });
+    } catch (err) {
+      console.error("[KitchenPage] Dismiss failed:", err);
+      setError(true);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleUndo = async () => {
+    if (!undo) return;
+    const { order, timeoutId } = undo;
+    if (timeoutId) clearTimeout(timeoutId);
+    setUndo(null);
+    try {
+      await uncancelOrder(order.id, orderInfo(order), actor);
+    } catch (err) {
+      console.error("[KitchenPage] Undo failed:", err);
+      setError(true);
+    }
+  };
 
   const { newOrders, olderOrders } = useMemo(() => {
     const newList = [];
     const olderList = [];
-    for (const order of visibleOrders) {
+    for (const order of kitchenOrders ?? []) {
       const minutesAgo = order.createdAt ? (Date.now() - order.createdAt.getTime()) / 60000 : 0;
-      if (minutesAgo < NEW_TICKET_THRESHOLD_MIN) {
-        newList.push(order);
-      } else {
-        olderList.push(order);
-      }
+      if (minutesAgo < NEW_TICKET_THRESHOLD_MIN) newList.push(order);
+      else olderList.push(order);
     }
-    return { newOrders: newList, olderOrders: olderList };
-  }, [visibleOrders]);
+    // Oldest-first within each section so the kitchen works top-to-bottom.
+    const byAge = (a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0);
+    return { newOrders: newList.sort(byAge), olderOrders: olderList.sort(byAge) };
+  }, [kitchenOrders]);
 
-  const isLoading = orders === null;
+  const isLoading = kitchenOrders === null;
+  const activeCount = kitchenOrders?.length ?? 0;
 
   return (
     <div style={styles.page}>
@@ -258,7 +303,7 @@ function KitchenPageContent() {
       <header style={styles.header}>
         <h1 style={styles.title}>🍳 Kitchen</h1>
         <div style={styles.headerRight}>
-          <span style={styles.ticketCount}>{isLoading ? "" : `${visibleOrders.length} active`}</span>
+          <span style={styles.ticketCount}>{isLoading ? "" : `${activeCount} active`}</span>
           <span style={styles.userEmail}>{profile?.email}</span>
           <button onClick={() => signOut()} style={styles.signOutBtn}>
             Sign Out
@@ -270,7 +315,7 @@ function KitchenPageContent() {
         {error && (
           <div style={styles.errorBox}>
             <p style={{ fontFamily: theme.font.body, fontSize: 16, color: theme.color.danger, margin: 0 }}>
-              Could not load orders. Check the connection or ask for help.
+              Something went wrong. Check the connection or ask for help.
             </p>
           </div>
         )}
@@ -295,7 +340,7 @@ function KitchenPageContent() {
           </div>
         )}
 
-        {!isLoading && !error && visibleOrders.length === 0 && (
+        {!isLoading && !error && activeCount === 0 && (
           <div style={styles.emptyState}>
             <span style={{ fontSize: 56 }}>✅</span>
             <p style={styles.emptyTitle}>All caught up</p>
@@ -303,34 +348,50 @@ function KitchenPageContent() {
           </div>
         )}
 
-        {!isLoading && !error && visibleOrders.length > 0 && (
+        {!isLoading && !error && activeCount > 0 && (
           <>
             <TicketSection
               title="NEW"
               count={newOrders.length}
               accentColor={theme.color.accent}
               orders={newOrders}
+              onFinish={handleFinish}
               onRequestDismiss={setDismissTarget}
+              busyId={busyId}
             />
             <TicketSection
               title="OLDER"
               count={olderOrders.length}
               accentColor={theme.color.warning}
               orders={olderOrders}
+              onFinish={handleFinish}
               onRequestDismiss={setDismissTarget}
+              busyId={busyId}
             />
           </>
         )}
       </main>
 
+      {undo && (
+        <div style={styles.undoBar}>
+          <span style={styles.undoText}>
+            Dismissed Table {undo.order.tableNumber}&apos;s order — removed from the bill.
+          </span>
+          <button onClick={handleUndo} style={styles.undoBtn}>
+            Undo
+          </button>
+        </div>
+      )}
+
       <ConfirmDialog
         open={!!dismissTarget}
         onClose={() => setDismissTarget(null)}
         onConfirm={handleConfirmDismiss}
-        title="Dismiss Ticket"
+        title="Dismiss Order"
+        confirmLabel="Dismiss & remove from bill"
         message={
           dismissTarget
-            ? `Dismiss Table ${dismissTarget.tableNumber}'s ticket? This only removes it from THIS kitchen screen — it does not mark the order as served, and it will not reappear unless this screen is refreshed and the dismissal is cleared.`
+            ? `Dismiss Table ${dismissTarget.tableNumber}'s order? This tells everyone the kitchen won't make it — it's removed from every kitchen screen AND taken off the customer's bill. You'll have a few seconds to undo.`
             : ""
         }
       />
@@ -340,7 +401,7 @@ function KitchenPageContent() {
 
 export default function KitchenPage() {
   return (
-    <AdminGuard requiredRoles={["admin", "manager", "server", "kitchen"]}>
+    <AdminGuard requiredRoles={["admin", "staff", "kitchen"]}>
       <KitchenPageContent />
     </AdminGuard>
   );
@@ -547,17 +608,71 @@ const styles = {
     color: theme.color.textFaint,
     fontStyle: "italic",
   },
-  dismissBtn: {
-    width: "100%",
-    padding: "10px",
+  actionRow: {
+    display: "flex",
+    gap: 10,
+  },
+  finishBtn: {
+    flex: 2,
+    padding: "14px",
     borderRadius: theme.radius.sm,
-    border: `1px solid ${theme.color.border}`,
-    background: "rgba(255,255,255,0.03)",
-    color: theme.color.textMuted,
+    border: "none",
+    background: theme.color.accent,
+    color: "#0a0c10",
+    fontFamily: theme.font.display,
+    fontWeight: 800,
+    fontSize: 16,
+    letterSpacing: "0.02em",
+    cursor: "pointer",
+  },
+  dismissBtn: {
+    flex: 1,
+    padding: "14px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.danger}55`,
+    background: "rgba(239,68,68,0.08)",
+    color: theme.color.danger,
     fontFamily: theme.font.display,
     fontWeight: 700,
-    fontSize: 12,
-    letterSpacing: "0.04em",
+    fontSize: 14,
+    letterSpacing: "0.02em",
     cursor: "pointer",
+  },
+  btnDisabled: {
+    opacity: 0.5,
+    cursor: "default",
+  },
+  undoBar: {
+    position: "fixed",
+    left: "50%",
+    bottom: 24,
+    transform: "translateX(-50%)",
+    display: "flex",
+    alignItems: "center",
+    gap: 18,
+    padding: "14px 20px",
+    background: theme.color.surface,
+    border: `1px solid ${theme.color.border}`,
+    borderRadius: theme.radius.md,
+    boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+    zIndex: 50,
+    maxWidth: "90vw",
+  },
+  undoText: {
+    fontFamily: theme.font.body,
+    fontSize: 14,
+    color: theme.color.textSecondary,
+  },
+  undoBtn: {
+    padding: "8px 18px",
+    borderRadius: theme.radius.sm,
+    border: "none",
+    background: theme.color.accent,
+    color: "#0a0c10",
+    fontFamily: theme.font.display,
+    fontWeight: 800,
+    fontSize: 14,
+    cursor: "pointer",
+    flexShrink: 0,
   },
 };

@@ -117,9 +117,11 @@ function OrderGroup({ order, onReorder }) {
 }
 
 function statusStyle(status) {
-  if (status === "served") return { color: theme.color.accent, background: theme.color.accentBg };
-  if (status === "preparing") return { color: theme.color.warning, background: theme.color.warningBg };
-  return { color: theme.color.info, background: theme.color.infoBg };
+  // Order lifecycle is pending -> completed | cancelled (see
+  // lib/orderService.js). Cancelled orders never reach the Bill tab —
+  // isActiveOrder() filters them out upstream — so only these two show.
+  if (status === "completed") return { color: theme.color.accent, background: theme.color.accentBg };
+  return { color: theme.color.info, background: theme.color.infoBg }; // pending
 }
 
 export default function BillTab({ identity, onAddMoreItems }) {

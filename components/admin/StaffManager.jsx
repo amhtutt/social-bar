@@ -1,7 +1,7 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// components/admin/StaffManager.jsx  —  Admin: create Manager/Server accounts
+// components/admin/StaffManager.jsx  —  Admin: create Staff/Kitchen accounts
 //
 // Lets a restaurant's Admin onboard their own staff without needing the
 // platform owner to create accounts manually in the Firebase console.
@@ -17,7 +17,7 @@ import { theme } from "@/lib/theme";
 import Modal from "./Modal";
 import { Field, TextInput } from "./FormField";
 
-const EMPTY_FORM = { email: "", password: "", role: "server" };
+const EMPTY_FORM = { email: "", password: "", role: "staff" };
 
 export default function StaffManager() {
   const { venueId } = useAuth();
@@ -87,8 +87,7 @@ export default function StaffManager() {
       </div>
 
       <p style={styles.hint}>
-        Manager and Server accounts can manage orders and bills, but cannot edit the menu. Only Admin accounts have
-        menu access.
+        Staff accounts can manage orders and bills, but cannot edit the menu. Only Admin accounts have menu access.
       </p>
 
       {error && (
@@ -102,7 +101,7 @@ export default function StaffManager() {
       {!isLoading && !error && staff.length === 0 && (
         <div style={styles.emptyState}>
           <p style={{ fontFamily: theme.font.body, fontSize: 13, color: theme.color.textMuted }}>
-            No staff accounts yet. Add a Manager or Server to get started.
+            No staff accounts yet. Add a Staff or Kitchen account to get started.
           </p>
         </div>
       )}
@@ -129,7 +128,7 @@ export default function StaffManager() {
 
         <Field label="Role">
           <div style={{ display: "flex", gap: 8 }}>
-            {["manager", "server", "kitchen"].map((r) => (
+            {["staff", "kitchen"].map((r) => (
               <button
                 key={r}
                 onClick={() => setFormData((f) => ({ ...f, role: r }))}
@@ -138,7 +137,7 @@ export default function StaffManager() {
                   ...(formData.role === r ? styles.roleOptionActive : {}),
                 }}
               >
-                {r === "manager" ? "Manager" : r === "server" ? "Server" : "Kitchen"}
+                {r === "staff" ? "Staff" : "Kitchen"}
               </button>
             ))}
           </div>
@@ -225,11 +224,11 @@ const styles = {
   },
   roleBadge: (role) => {
     const colorMap = {
-      manager: theme.color.warning,
+      staff: theme.color.warning,
       kitchen: theme.color.info,
     };
     const bgMap = {
-      manager: theme.color.warningBg,
+      staff: theme.color.warningBg,
       kitchen: theme.color.infoBg,
     };
     return {

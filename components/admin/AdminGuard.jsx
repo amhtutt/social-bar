@@ -10,7 +10,8 @@
 //   - Signed in with matching role -> render children
 //
 // requiredRoles defaults to ["admin"] (the menu editor). Pass a wider list
-// like ["admin","manager","server"] for screens any staff member can use.
+// like ["admin","staff"] for screens any front-of-house member can use, or
+// ["admin","staff","kitchen"] for screens every role can reach.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useAuth } from "@/lib/AuthContext";
