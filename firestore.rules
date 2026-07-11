@@ -1,0 +1,283 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─────────────────────────────────────────────────────────────────
+    // Model:
+    //  • Staff (admin/staff/kitchen): email-password auth + a
+    //    users/{uid} profile doc containing { venueId, role }.
+    //  • Customer tablets: Anonymous Auth. During Setup, registerTablet()
+    //    writes tabletIdentities/{its anon uid} = { uid, venueId,
+    //    tableNumber, tabletSlot } — the security anchor. The existing
+    //    tablets/{venueId_table_N_S} presence docs keep their
+    //    deterministic IDs unchanged (Floor View untouched).
+    //  • Customer reads of orders / bill requests are scoped to exactly
+    //    the venue + table the device's own identity doc declares.
+    //  • The Cloud Function (Admin SDK) bypasses these rules — only it
+    //    can author priceValidation results that stick.
+    // ─────────────────────────────────────────────────────────────────
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasProfile() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isVenueStaff(venueId) {
+      return hasProfile()
+        && profile().venueId == venueId
+        && profile().role in ['admin', 'staff', 'kitchen'];
+    }
+
+    // Front-of-house: can touch money and menus
+    function isFOH(venueId) {
+      return hasProfile()
+        && profile().venueId == venueId
+        && profile().role in ['admin', 'staff'];
+    }
+
+    function isKitchen(venueId) {
+      return hasProfile()
+        && profile().venueId == venueId
+        && profile().role == 'kitchen';
+    }
+
+    function isVenueAdmin(venueId) {
+      return hasProfile()
+        && profile().venueId == venueId
+        && profile().role == 'admin';
+    }
+
+    function hasIdentity() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/tabletIdentities/$(request.auth.uid));
+    }
+
+    function identity() {
+      return get(/databases/$(database)/documents/tabletIdentities/$(request.auth.uid)).data;
+    }
+
+    // "This signed-in device is registered to exactly this venue +
+    // table." Works for queries too, because the customer subscriptions
+    // filter on venueId == X and tableNumber == Y with equality — the
+    // rules engine can prove the match against the query constraints.
+    function isTabletFor(venueId, tableNumber) {
+      return hasIdentity()
+        && identity().venueId == venueId
+        && identity().tableNumber == tableNumber;
+    }
+
+    // ─── venues ──────────────────────────────────────────────────────
+    // Public read: tablets read feature flags + name before any auth.
+    // Write: venue owner (doc id == owner uid) or its admin.
+    match /venues/{venueId} {
+      allow read: if true;
+      allow write: if signedIn()
+        && (request.auth.uid == venueId || isVenueAdmin(venueId));
+    }
+
+    // ─── users ───────────────────────────────────────────────────────
+    // No self-escalation: a user can never change their own role or
+    // venueId. Owner bootstrap: uid == venueId creates itself as admin.
+    match /users/{uid} {
+      allow read: if signedIn()
+        && (request.auth.uid == uid || isVenueAdmin(resource.data.venueId));
+
+      allow create: if signedIn() && (
+        (request.auth.uid == uid
+          && request.resource.data.venueId == request.auth.uid
+          && request.resource.data.role == 'admin')
+        || isVenueAdmin(request.resource.data.venueId)
+      );
+
+      allow update: if signedIn() && (
+        isVenueAdmin(resource.data.venueId)
+        || (request.auth.uid == uid
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.venueId == resource.data.venueId)
+      );
+
+      allow delete: if isVenueAdmin(resource.data.venueId);
+    }
+
+    // ─── tabletIdentities ────────────────────────────────────────────
+    // One doc per physical device, keyed by its anonymous-auth uid.
+    // Self-declared at Setup (re-running Setup on a repurposed tablet
+    // just overwrites it). This is what isTabletFor() checks. Staff can
+    // read/delete their venue's identities (e.g. decommissioning).
+    match /tabletIdentities/{uid} {
+      allow read: if signedIn()
+        && (request.auth.uid == uid || isVenueStaff(resource.data.venueId));
+
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == request.auth.uid;
+
+      allow delete: if signedIn()
+        && (request.auth.uid == uid || isFOH(resource.data.venueId));
+    }
+
+    // ─── tablets (presence) ──────────────────────────────────────────
+    // Deterministic doc IDs ({venueId}_table_{N}_{slot}) — UNCHANGED
+    // from the existing model, so device swaps reuse the same doc and
+    // Floor View sees no duplicates. Writes allowed only when the
+    // caller's identity doc matches the presence doc's venue + table
+    // (i.e. a device may only report presence for the slot it's
+    // registered to), or by FOH staff.
+    match /tablets/{tabletId} {
+      allow read: if isVenueStaff(resource.data.venueId);
+
+      allow create: if signedIn() && (
+        isFOH(request.resource.data.venueId)
+        || isTabletFor(request.resource.data.venueId, request.resource.data.tableNumber)
+      );
+
+      allow update: if signedIn()
+        && request.resource.data.venueId == resource.data.venueId
+        && request.resource.data.tableNumber == resource.data.tableNumber
+        && (
+          isFOH(resource.data.venueId)
+          || isTabletFor(resource.data.venueId, resource.data.tableNumber)
+        );
+
+      allow delete: if isFOH(resource.data.venueId);
+    }
+
+    // ─── flaggedTables ───────────────────────────────────────────────
+    // Staff judgment calls (VIP, check-in needed) — staff-only, venue-
+    // scoped. Was previously covered by a blanket allow; now explicit.
+    match /flaggedTables/{flagId} {
+      allow read: if isVenueStaff(resource.data.venueId);
+      allow create, update: if isFOH(request.resource.data.venueId);
+      allow delete: if isFOH(resource.data.venueId);
+    }
+
+    // ─── menuCategories / menuItems ──────────────────────────────────
+    // Public read (customer menu, pre-auth). Writes: FOH of the owning
+    // venue; venueId immutable. Kitchen may flip ONLY `available`
+    // (the 86'd-item flow).
+    match /menuCategories/{categoryId} {
+      allow read: if true;
+      allow create: if isFOH(request.resource.data.venueId);
+      allow update: if isFOH(resource.data.venueId)
+        && request.resource.data.venueId == resource.data.venueId;
+      allow delete: if isFOH(resource.data.venueId);
+    }
+
+    match /menuItems/{itemId} {
+      allow read: if true;
+      allow create: if isFOH(request.resource.data.venueId);
+      allow update: if (
+        isFOH(resource.data.venueId)
+        || (isKitchen(resource.data.venueId)
+            && request.resource.data.diff(resource.data)
+                 .affectedKeys().hasOnly(['available']))
+      ) && request.resource.data.venueId == resource.data.venueId;
+      allow delete: if isFOH(resource.data.venueId);
+    }
+
+    // ─── orders ──────────────────────────────────────────────────────
+    // Read:  venue staff, or the registered tablet for that exact
+    //        venue + table (Bill tab must show staff-created orders too,
+    //        so scoping is by table, not by createdByUid).
+    // Create:
+    //   • tablet: only for its own registered table, stamping its own
+    //     uid, source "customer", status "pending", and it may NOT
+    //     write priceValidation.
+    //   • staff: for their own venue (covers createOrderForTable and
+    //     the restore/undo setDoc re-creations; priceValidation may
+    //     pass through on restores — harmless, because
+    //     validateOrderOnCreate re-derives and overwrites it on every
+    //     create anyway).
+    // Update: FOH freely except protected fields; kitchen only
+    //         status/updatedAt. Customers never update orders —
+    //         idempotent re-submits are handled client-side (see
+    //         orderService.submitOrder).
+    // Delete: FOH only (voidOrder).
+    match /orders/{orderId} {
+      allow read: if signedIn() && (
+        isVenueStaff(resource.data.venueId)
+        || isTabletFor(resource.data.venueId, resource.data.tableNumber)
+      );
+
+      allow create: if signedIn() && (
+        (
+          isTabletFor(request.resource.data.venueId, request.resource.data.tableNumber)
+          && request.resource.data.createdByUid == request.auth.uid
+          && request.resource.data.source == 'customer'
+          && request.resource.data.status == 'pending'
+          && !('priceValidation' in request.resource.data)
+        )
+        || isVenueStaff(request.resource.data.venueId)
+      );
+
+      allow update: if signedIn()
+        && !request.resource.data.diff(resource.data).affectedKeys()
+             .hasAny(['priceValidation', 'venueId', 'createdByUid'])
+        && (
+          isFOH(resource.data.venueId)
+          || (isKitchen(resource.data.venueId)
+              && request.resource.data.diff(resource.data)
+                   .affectedKeys().hasOnly(['status', 'updatedAt']))
+        );
+
+      allow delete: if isFOH(resource.data.venueId);
+    }
+
+    // ─── billRequests ────────────────────────────────────────────────
+    match /billRequests/{requestId} {
+      allow read: if signedIn() && (
+        isVenueStaff(resource.data.venueId)
+        || isTabletFor(resource.data.venueId, resource.data.tableNumber)
+      );
+
+      allow create: if signedIn() && (
+        (
+          isTabletFor(request.resource.data.venueId, request.resource.data.tableNumber)
+          && request.resource.data.createdByUid == request.auth.uid
+        )
+        || isVenueStaff(request.resource.data.venueId)
+      );
+
+      allow update, delete: if isVenueStaff(resource.data.venueId);
+    }
+
+    // ─── serverCalls ─────────────────────────────────────────────────
+    // Same pattern as billRequests (feature currently flag-gated; rules
+    // ready for when it's on).
+    match /serverCalls/{callId} {
+      allow read: if signedIn() && (
+        isVenueStaff(resource.data.venueId)
+        || isTabletFor(resource.data.venueId, resource.data.tableNumber)
+      );
+
+      allow create: if signedIn() && (
+        (
+          isTabletFor(request.resource.data.venueId, request.resource.data.tableNumber)
+          && request.resource.data.createdByUid == request.auth.uid
+        )
+        || isVenueStaff(request.resource.data.venueId)
+      );
+
+      allow update, delete: if isVenueStaff(resource.data.venueId);
+    }
+
+    // ─── activityLog ─────────────────────────────────────────────────
+    // Append-only, venue-scoped. Never editable or deletable from a
+    // client — an audit log you can rewrite is not an audit log.
+    match /activityLog/{entryId} {
+      allow read: if isVenueStaff(resource.data.venueId);
+      allow create: if isVenueStaff(request.resource.data.venueId);
+      allow update, delete: if false;
+    }
+
+    // Everything not matched above is denied by default.
+  }
+}

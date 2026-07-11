@@ -7,28 +7,28 @@
 // unitPrice SHOULD be from the actual current menuItems documents, and
 // compares that against what the client submitted.
 //
-// Why this matters: every price calculation in this app today happens
-// CLIENT-SIDE (lib/CartContext.jsx, lib/venueConfig.js) and is trusted at
-// face value when written to Firestore. A modified client — someone
-// editing the JS in DevTools, or hitting the Firestore REST API directly
-// — could submit unitPrice: 0.01 regardless of what the menu actually
-// says, and nothing before this function would catch it.
-//
-// DESIGN DECISION: flag, don't block or auto-correct.
-// This function does NOT delete the order, reject the write, or silently
-// fix the price. A false positive (e.g. a legitimate price change that
-// landed in a race with an in-flight order) blocking or silently altering
-// a real order mid-service would be worse than letting a rare bad actor
-// through undetected for a few minutes. Instead, on a mismatch it:
+// DESIGN DECISION: flag, don't block or auto-correct. On a mismatch it:
 //   1. Writes priceValidation: { status: "mismatch", mismatches: [...] }
-//      onto the order itself, so it's visible in any future admin view
-//   2. Logs an activityLog entry with action "price_validation_failed",
-//      visible immediately on the existing Floor View Activity Log tab
+//      onto the order itself (clients cannot spoof a lasting result —
+//      this function runs on every create and overwrites the field,
+//      using the Admin SDK which bypasses Firestore rules)
+//   2. Logs an activityLog entry with action "price_validation_failed"
 // Orders that pass validation get priceValidation: { status: "ok" }.
 //
-// Tolerance: prices are compared with a small epsilon (0.01) to avoid
-// flagging harmless floating-point rounding differences between client
-// and server arithmetic.
+// CHANGES from the previous version:
+//   • All menuItems reads for an order now happen in ONE batched
+//     db.getAll() call instead of N sequential awaits — faster and
+//     cheaper on multi-item orders.
+//   • Mismatch summary formatting no longer assumes USD cents:
+//     amounts are printed as locale-grouped integers, e.g. "12,500 MMK".
+//   • snap.ref.update is wrapped so a transient failure is logged
+//     rather than crashing the invocation silently.
+//
+// KNOWN GAPS (accepted for now, revisit later):
+//   • Combo items (no itemId) are skipped — combo pricing unvalidated.
+//   • Only fires on CREATE; staff edits to an existing order's items
+//     are not re-validated.
+//   • Validates unitPrice per line, not order-level totals/tax/service.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
@@ -40,14 +40,17 @@ const db = getFirestore();
 
 const PRICE_EPSILON = 0.01;
 
+function formatAmount(n) {
+  if (typeof n !== "number" || !isFinite(n)) return String(n);
+  return `${Math.round(n).toLocaleString("en-US")} MMK`;
+}
+
 /**
  * computeExpectedUnitPrice(menuItemData, selectedModifiers)
- * Mirrors the EXACT same math as lib/menuService.js's
- * calculateModifiersPriceDelta() + the client's unitPrice derivation in
- * lib/CartContext.jsx — base price plus the sum of each selected
- * modifier's priceDelta, looked up fresh from the menu item's CURRENT
- * modifierGroups (not trusting the priceDelta the client already
- * attached to each selectedModifiers entry).
+ * Mirrors the same math as the client's unitPrice derivation — base price
+ * plus the sum of each selected modifier's priceDelta, looked up fresh
+ * from the menu item's CURRENT modifierGroups (never trusting the
+ * priceDelta the client attached to selectedModifiers entries).
  */
 function computeExpectedUnitPrice(menuItemData, selectedModifiers) {
   const basePrice = menuItemData.price ?? 0;
@@ -72,28 +75,33 @@ exports.validateOrderOnCreate = onDocumentCreated("orders/{orderId}", async (eve
   const order = snap.data();
   const orderId = event.params.orderId;
 
-  const mismatches = [];
   const items = order.items ?? [];
+  const mismatches = [];
 
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
+  // Batch-read every referenced menu item in one round trip.
+  // Combos and any item without an itemId are skipped (can't be looked up).
+  const lookups = items
+    .map((item, i) => ({ item, i }))
+    .filter(({ item }) => !!item.itemId);
 
-    // Combos and any item without an itemId shouldn't crash validation
-    // for the whole order — skip anything we can't look up.
-    if (!item.itemId) continue;
-
-    let menuItemSnap;
+  let menuSnaps = [];
+  if (lookups.length > 0) {
+    const refs = lookups.map(({ item }) => db.collection("menuItems").doc(item.itemId));
     try {
-      menuItemSnap = await db.collection("menuItems").doc(item.itemId).get();
+      menuSnaps = await db.getAll(...refs);
     } catch (err) {
-      console.error(`[validateOrderOnCreate] Failed to read menuItems/${item.itemId}:`, err);
-      continue;
+      console.error(`[validateOrderOnCreate] getAll failed for order ${orderId}:`, err);
+      return; // can't validate anything this run; leave order untouched
     }
+  }
+
+  for (let k = 0; k < lookups.length; k++) {
+    const { item, i } = lookups[k];
+    const menuItemSnap = menuSnaps[k];
 
     if (!menuItemSnap.exists) {
-      // Item was deleted (soft-delete still keeps the doc, so this means
-      // a genuinely missing/bad itemId) — flag it, since price can't be
-      // verified against nothing.
+      // Soft-delete keeps docs, so a missing doc means a genuinely
+      // bad/deleted itemId — flag it, price can't be verified.
       mismatches.push({
         itemIndex: i,
         itemId: item.itemId,
@@ -139,7 +147,11 @@ exports.validateOrderOnCreate = onDocumentCreated("orders/{orderId}", async (eve
       ? { status: "ok", checkedAt: FieldValue.serverTimestamp() }
       : { status: "mismatch", mismatches, checkedAt: FieldValue.serverTimestamp() };
 
-  await snap.ref.update({ priceValidation });
+  try {
+    await snap.ref.update({ priceValidation });
+  } catch (err) {
+    console.error(`[validateOrderOnCreate] Failed to write priceValidation on ${orderId}:`, err);
+  }
 
   if (mismatches.length > 0) {
     console.warn(`[validateOrderOnCreate] Price mismatch on order ${orderId}:`, mismatches);
@@ -147,7 +159,7 @@ exports.validateOrderOnCreate = onDocumentCreated("orders/{orderId}", async (eve
     const summary = mismatches
       .map((m) =>
         m.issue === "price_mismatch"
-          ? `${m.name_en}: submitted $${m.submittedUnitPrice?.toFixed(2)}, expected $${m.expectedUnitPrice?.toFixed(2)}`
+          ? `${m.name_en}: submitted ${formatAmount(m.submittedUnitPrice)}, expected ${formatAmount(m.expectedUnitPrice)}`
           : `${m.name_en}: ${m.issue}`
       )
       .join("; ");
