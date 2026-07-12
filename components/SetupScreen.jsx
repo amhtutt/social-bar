@@ -12,7 +12,11 @@
 import { useState, useEffect } from "react";
 import { theme } from "@/lib/theme";
 
-const TABLE_COUNT = 10;
+// Quick-tap grid covers the common case; venues with more tables (or
+// this app has no admin-configurable table count yet — that belongs to
+// the future new-venue onboarding wizard) use "Other table number"
+// below the grid instead of being capped.
+const QUICK_PICK_TABLE_COUNT = 12;
 const TABLET_SLOTS = ["Tablet A", "Tablet B"];
 
 function getBreakpoint() {
@@ -68,10 +72,18 @@ export default function SetupScreen({ onConfirm }) {
   const [selectedTable, setSelectedTable] = useState(null);
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [confirming, setConfirming] = useState(false);
+  const [useCustomTable, setUseCustomTable] = useState(false);
+  const [customTableInput, setCustomTableInput] = useState("");
 
   const canConfirm = selectedTable !== null && selectedSlot !== null;
   const compact = bp === "xs";
   const tableGridCols = compact ? "repeat(2, 1fr)" : "repeat(5, 1fr)";
+
+  const handleCustomTableChange = (raw) => {
+    setCustomTableInput(raw);
+    const n = Number(raw);
+    setSelectedTable(Number.isInteger(n) && n > 0 ? n : null);
+  };
 
   const handleConfirm = () => {
     if (!canConfirm) return;
@@ -93,17 +105,53 @@ export default function SetupScreen({ onConfirm }) {
 
         <section style={{ marginBottom: compact ? 18 : 28 }}>
           <label style={styles.sectionLabel}>Select Table</label>
-          <div style={{ display: "grid", gridTemplateColumns: tableGridCols, gap: compact ? 7 : 10 }}>
-            {Array.from({ length: TABLE_COUNT }, (_, i) => i + 1).map((n) => (
-              <SelectCard
-                key={n}
-                label={`Table ${n}`}
-                selected={selectedTable === n}
-                onClick={() => setSelectedTable(n)}
-                compact={compact}
+          {!useCustomTable ? (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: tableGridCols, gap: compact ? 7 : 10 }}>
+                {Array.from({ length: QUICK_PICK_TABLE_COUNT }, (_, i) => i + 1).map((n) => (
+                  <SelectCard
+                    key={n}
+                    label={`Table ${n}`}
+                    selected={selectedTable === n}
+                    onClick={() => setSelectedTable(n)}
+                    compact={compact}
+                  />
+                ))}
+              </div>
+              <button
+                onClick={() => {
+                  setUseCustomTable(true);
+                  setSelectedTable(null);
+                }}
+                style={styles.customTableToggle}
+              >
+                Other table number →
+              </button>
+            </>
+          ) : (
+            <>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                value={customTableInput}
+                onChange={(e) => handleCustomTableChange(e.target.value)}
+                placeholder="Enter table number"
+                style={styles.customTableInput}
+                autoFocus
               />
-            ))}
-          </div>
+              <button
+                onClick={() => {
+                  setUseCustomTable(false);
+                  setCustomTableInput("");
+                  setSelectedTable(null);
+                }}
+                style={styles.customTableToggle}
+              >
+                ← Back to quick pick
+              </button>
+            </>
+          )}
         </section>
 
         <section style={{ marginBottom: compact ? 22 : 34 }}>
@@ -208,6 +256,30 @@ const styles = {
     color: theme.color.textMuted,
     fontWeight: 400,
     fontSize: 14,
+  },
+  customTableToggle: {
+    marginTop: 10,
+    background: "none",
+    border: "none",
+    padding: 0,
+    color: theme.color.accent,
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 12,
+    cursor: "pointer",
+  },
+  customTableInput: {
+    width: "100%",
+    padding: "16px",
+    borderRadius: 14,
+    border: `1.5px solid ${theme.color.accentBorder}`,
+    background: theme.color.surface,
+    color: theme.color.textPrimary,
+    fontFamily: theme.font.display,
+    fontSize: 18,
+    fontWeight: 700,
+    outline: "none",
+    textAlign: "center",
   },
   sectionLabel: {
     display: "block",

@@ -325,12 +325,28 @@ function EmptyMenuState() {
   );
 }
 
-function MenuErrorState() {
+function MenuErrorState({ onRetry }) {
   return (
     <div style={{ textAlign: "center", padding: "40px 20px", background: theme.color.dangerBg, border: `1px solid ${theme.color.danger}30`, borderRadius: 14 }}>
-      <p style={{ fontFamily: theme.font.body, fontSize: 14, color: theme.color.danger, margin: 0 }}>
-        Could not load the menu. Pull down to retry or ask staff for help.
+      <p style={{ fontFamily: theme.font.body, fontSize: 14, color: theme.color.danger, margin: "0 0 14px" }}>
+        Could not load the menu. Try again, or ask staff for help.
       </p>
+      <button
+        onClick={onRetry}
+        style={{
+          padding: "10px 20px",
+          borderRadius: theme.radius.sm,
+          border: `1px solid ${theme.color.danger}`,
+          background: "transparent",
+          color: theme.color.danger,
+          fontFamily: theme.font.display,
+          fontWeight: 700,
+          fontSize: 13,
+          cursor: "pointer",
+        }}
+      >
+        Retry
+      </button>
     </div>
   );
 }
@@ -346,6 +362,15 @@ export default function MenuView({ venueId, onAddToCart }) {
   const [itemsError, setItemsError] = useState(false);
   const [activeCategoryId, setActiveCat] = useState(null);
   const [customizingItem, setCustomizingItem] = useState(null);
+  const [retryKey, setRetryKey] = useState(0);
+
+  const handleRetry = () => {
+    setCategories(null);
+    setItems(null);
+    setCatError(false);
+    setItemsError(false);
+    setRetryKey((k) => k + 1);
+  };
 
   useEffect(() => {
     setLang(loadLang());
@@ -366,7 +391,7 @@ export default function MenuView({ venueId, onAddToCart }) {
       unsubCategories();
       unsubItems();
     };
-  }, [venueId]);
+  }, [venueId, retryKey]);
 
   const handleLangChange = (newLang) => {
     setLang(newLang);
@@ -458,7 +483,7 @@ export default function MenuView({ venueId, onAddToCart }) {
         </div>
 
         {categoriesLoading && <CategorySkeleton />}
-        {!categoriesLoading && categoriesError && <MenuErrorState />}
+        {!categoriesLoading && categoriesError && <MenuErrorState onRetry={handleRetry} />}
         {!categoriesLoading && !categoriesError && sidebarCategories.length === 0 && (
           <p style={{ fontFamily: theme.font.body, fontSize: 12, color: theme.color.textMuted }}>No categories yet.</p>
         )}
@@ -489,7 +514,7 @@ export default function MenuView({ venueId, onAddToCart }) {
           </div>
         )}
 
-        {itemsError && <MenuErrorState />}
+        {itemsError && <MenuErrorState onRetry={handleRetry} />}
 
         {!itemsError && (itemsLoading || categoriesLoading) && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 16 }}>

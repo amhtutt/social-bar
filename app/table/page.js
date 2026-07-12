@@ -28,6 +28,7 @@ import BillTab from "@/components/BillTab";
 import CartButton from "@/components/CartButton";
 import CartDrawer from "@/components/CartDrawer";
 import CallServerButton from "@/components/CallServerButton";
+import RequestBillButton from "@/components/RequestBillButton";
 import OrderConfirmation from "@/components/OrderConfirmation";
 import OrderStatusBadge from "@/components/OrderStatusBadge";
 import StaffPinModal from "@/components/StaffPinModal";
@@ -88,8 +89,10 @@ export default function TablePage() {
 
   if (identity === undefined || identity === null || features === null) return null;
 
+  const cartPersistKey = `cart_${identity.venueId}_${identity.table}_${identity.slot}`.replace(/\s+/g, "_");
+
   return (
-    <CartProvider>
+    <CartProvider persistKey={cartPersistKey}>
       <div style={styles.shell}>
         <div style={styles.blob1} />
         <div style={styles.blob2} />
@@ -144,6 +147,14 @@ export default function TablePage() {
         )}
 
         {isFeatureEnabled("callServer") && <CallServerButton identity={identity} />}
+
+        {isFeatureEnabled("bill") && (
+          <RequestBillButton
+            identity={identity}
+            stacked={isFeatureEnabled("callServer")}
+            hidden={activeTab === "bill"}
+          />
+        )}
 
         {confirmedOrder && (
           <OrderConfirmation

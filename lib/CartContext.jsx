@@ -18,9 +18,25 @@
 // the menu card. Tapping "Add to Cart" again on an item with the exact
 // same modifiers/instructions just increments that line's quantity rather
 // than opening a duplicate or asking again.
+//
+// PERSISTENCE: pass persistKey (e.g. "cart_{venueId}_{table}_{slot}") to
+// survive a refresh or the tablet sleeping mid-order — a real risk on a
+// shared tablet during service, and previously meant a lost cart with no
+// warning. Omit persistKey (StaffOrderModal's usage) for a cart that's
+// intentionally short-lived and never touches localStorage.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { createContext, useContext, useState, useCallback, useMemo } from "react";
+import { createContext, useContext, useState, useCallback, useMemo, useEffect } from "react";
+
+function loadPersistedCart(persistKey) {
+  if (!persistKey || typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(persistKey);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
 
 const CartContext = createContext(null);
 
@@ -41,9 +57,19 @@ export function buildLineKey({ itemId, selectedModifiers = [], specialInstructio
   return `${itemId}::${modifierKey}::${specialInstructions.trim().toLowerCase()}`;
 }
 
-export function CartProvider({ children }) {
-  const [cartItems, setCartItems] = useState([]);
+export function CartProvider({ children, persistKey }) {
+  const [cartItems, setCartItems] = useState(() => loadPersistedCart(persistKey));
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+
+  useEffect(() => {
+    if (!persistKey || typeof window === "undefined") return;
+    try {
+      if (cartItems.length === 0) localStorage.removeItem(persistKey);
+      else localStorage.setItem(persistKey, JSON.stringify(cartItems));
+    } catch {
+      // ignore — worst case the cart doesn't survive a reload
+    }
+  }, [cartItems, persistKey]);
 
   /**
    * addToCart(cartLine)

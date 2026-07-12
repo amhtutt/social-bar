@@ -22,6 +22,7 @@ import { useState, useMemo, useRef } from "react";
 import * as Sentry from "@sentry/nextjs";
 import { useCart } from "@/lib/CartContext";
 import { submitOrder } from "@/lib/orderService";
+import { checkItemsAvailability } from "@/lib/menuService";
 import { calculateOrderTotals } from "@/lib/venueConfig";
 import { theme } from "@/lib/theme";
 
@@ -41,6 +42,7 @@ export default function CartDrawer({ identity, pricing, onOrderPlaced }) {
     useCart();
 
   const [submitState, setSubmitState] = useState("idle");
+  const [removedItemNames, setRemovedItemNames] = useState([]);
 
   // One key per checkout ATTEMPT, not per tap — generated lazily on first
   // submit and deliberately NOT regenerated on a failed retry, so a
@@ -57,6 +59,25 @@ export default function CartDrawer({ identity, pricing, onOrderPlaced }) {
 
   const handlePlaceOrder = async () => {
     if (cartItems.length === 0) return;
+    setSubmitState("checking");
+    setRemovedItemNames([]);
+
+    try {
+      const unavailableIds = await checkItemsAvailability(cartItems.map((c) => c.itemId));
+      if (unavailableIds.length > 0) {
+        const removed = cartItems.filter((c) => unavailableIds.includes(c.itemId));
+        removed.forEach((c) => removeItem(c.lineKey));
+        setRemovedItemNames(removed.map((c) => c.name_en));
+        setSubmitState("unavailable");
+        return;
+      }
+    } catch (err) {
+      // Don't block checkout on the check itself failing (e.g. offline) —
+      // fall through to the real submit attempt, which has its own error
+      // handling and will surface a connection problem either way.
+      console.error("[CartDrawer] Availability check failed, proceeding anyway:", err);
+    }
+
     setSubmitState("sending");
 
     if (!idempotencyKeyRef.current) {
@@ -184,16 +205,24 @@ export default function CartDrawer({ identity, pricing, onOrderPlaced }) {
               <p style={styles.errorText}>Could not send order. Check connection and try again.</p>
             )}
 
+            {submitState === "unavailable" && (
+              <p style={styles.errorText}>
+                {removedItemNames.join(", ")} {removedItemNames.length === 1 ? "is" : "are"} no longer available and{" "}
+                {removedItemNames.length === 1 ? "was" : "were"} removed from your order. Review your cart and try
+                again.
+              </p>
+            )}
+
             <button
               onClick={handlePlaceOrder}
-              disabled={submitState === "sending"}
+              disabled={submitState === "sending" || submitState === "checking"}
               style={{
                 ...styles.orderBtn,
-                opacity: submitState === "sending" ? 0.6 : 1,
-                cursor: submitState === "sending" ? "not-allowed" : "pointer",
+                opacity: submitState === "sending" || submitState === "checking" ? 0.6 : 1,
+                cursor: submitState === "sending" || submitState === "checking" ? "not-allowed" : "pointer",
               }}
             >
-              {submitState === "sending" ? "Sending order…" : "Place Order"}
+              {submitState === "checking" ? "Checking…" : submitState === "sending" ? "Sending order…" : "Place Order"}
             </button>
           </div>
         )}

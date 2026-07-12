@@ -19,8 +19,11 @@ import { subscribeToVenueTablets, subscribeToVenueFlaggedTables, flagTable, unfl
 import { theme } from "@/lib/theme";
 import AdminGuard from "@/components/admin/AdminGuard";
 import TableOrdersCard from "@/components/staff/TableOrdersCard";
+import StaffOrderModal from "@/components/staff/StaffOrderModal";
 import ActivityLogPanel from "@/components/staff/ActivityLogPanel";
 import StagingBanner from "@/components/StagingBanner";
+import Modal from "@/components/admin/Modal";
+import { Field, TextInput } from "@/components/admin/FormField";
 
 const TABS = [
   { id: "floor", label: "Floor View" },
@@ -57,6 +60,11 @@ function StaffPageContent() {
   const [tablets, setTablets] = useState([]);
   const [flaggedTables, setFlaggedTables] = useState([]);
   const [error, setError] = useState(false);
+  const [flagModalTarget, setFlagModalTarget] = useState(null); // tableNumber, or null when closed
+  const [flagNoteInput, setFlagNoteInput] = useState("");
+  const [newTableModalOpen, setNewTableModalOpen] = useState(false);
+  const [newTableNumberInput, setNewTableNumberInput] = useState("");
+  const [walkInTable, setWalkInTable] = useState(null); // tableNumber to open StaffOrderModal for
 
   const actor = { email: profile?.email, role: profile?.role };
 
@@ -142,16 +150,40 @@ function StaffPageContent() {
   const availableTables = tableGroups.map((g) => g.tableNumber);
 
   const handleToggleFlag = async (tableNumber, currentFlag) => {
-    try {
-      if (currentFlag) {
+    if (currentFlag) {
+      try {
         await unflagTable(venueId, tableNumber);
-      } else {
-        const note = window.prompt("Flag note (optional) — e.g. VIP, celebrating a birthday, needs a check-in:") ?? "";
-        await flagTable(venueId, tableNumber, note, actor);
+      } catch (err) {
+        console.error("[StaffPage] Failed to unflag table:", err);
       }
-    } catch (err) {
-      console.error("[StaffPage] Failed to toggle table flag:", err);
+      return;
     }
+    setFlagNoteInput("");
+    setFlagModalTarget(tableNumber);
+  };
+
+  const handleConfirmFlag = async () => {
+    if (flagModalTarget == null) return;
+    try {
+      await flagTable(venueId, flagModalTarget, flagNoteInput, actor);
+    } catch (err) {
+      console.error("[StaffPage] Failed to flag table:", err);
+    }
+    setFlagModalTarget(null);
+  };
+
+  // "+ New Table": opens StaffOrderModal directly for a table number that
+  // has no card yet (no order, no online tablet, no flag) — the only
+  // digital path to start a tab when a table has no live/paired tablet
+  // (walk-ins, a dead tablet, bar-seat-only areas). No Firestore write
+  // happens here; the table gets its own real card the moment the first
+  // order lands, via the normal subscribeToVenueOrders grouping.
+  const handleOpenNewTable = () => {
+    const n = Number(newTableNumberInput);
+    if (!Number.isInteger(n) || n <= 0) return;
+    setWalkInTable(n);
+    setNewTableModalOpen(false);
+    setNewTableNumberInput("");
   };
 
   return (
@@ -209,6 +241,12 @@ function StaffPageContent() {
       <main style={styles.content}>
         {activeTab === "floor" && (
           <>
+            <div style={styles.floorToolbar}>
+              <button onClick={() => setNewTableModalOpen(true)} style={styles.newTableBtn}>
+                + New Table
+              </button>
+            </div>
+
             {error && (
               <div style={styles.errorBox}>
                 <p style={{ fontFamily: theme.font.body, fontSize: 14, color: theme.color.danger, margin: 0 }}>
@@ -269,6 +307,46 @@ function StaffPageContent() {
 
         {activeTab === "log" && <ActivityLogPanel venueId={venueId} availableTables={availableTables} />}
       </main>
+
+      <Modal open={newTableModalOpen} onClose={() => setNewTableModalOpen(false)} title="Open a New Table" maxWidth={360}>
+        <Field label="Table Number" hint="For a walk-in or any table without a paired tablet.">
+          <TextInput
+            type="number"
+            value={newTableNumberInput}
+            onChange={setNewTableNumberInput}
+            placeholder="e.g. 7"
+          />
+        </Field>
+        <button
+          onClick={handleOpenNewTable}
+          disabled={!Number.isInteger(Number(newTableNumberInput)) || Number(newTableNumberInput) <= 0}
+          style={{
+            ...styles.newTableConfirmBtn,
+            opacity: !Number.isInteger(Number(newTableNumberInput)) || Number(newTableNumberInput) <= 0 ? 0.5 : 1,
+          }}
+        >
+          Open Table &amp; Add Order
+        </button>
+      </Modal>
+
+      <Modal open={flagModalTarget != null} onClose={() => setFlagModalTarget(null)} title={`Flag Table ${flagModalTarget}`} maxWidth={360}>
+        <Field label="Note (optional)" hint="e.g. VIP, celebrating a birthday, needs a check-in.">
+          <TextInput value={flagNoteInput} onChange={setFlagNoteInput} placeholder="Add a note…" />
+        </Field>
+        <button onClick={handleConfirmFlag} style={styles.newTableConfirmBtn}>
+          Flag Table
+        </button>
+      </Modal>
+
+      {walkInTable != null && (
+        <StaffOrderModal
+          open={walkInTable != null}
+          onClose={() => setWalkInTable(null)}
+          venueId={venueId}
+          tableNumber={walkInTable}
+          actor={actor}
+        />
+      )}
     </div>
   );
 }
@@ -405,6 +483,34 @@ const styles = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
     gap: 16,
+  },
+  floorToolbar: {
+    display: "flex",
+    justifyContent: "flex-end",
+    marginBottom: 14,
+  },
+  newTableBtn: {
+    padding: "9px 16px",
+    borderRadius: theme.radius.sm,
+    border: `1px solid ${theme.color.accentBorder}`,
+    background: theme.color.accentBg,
+    color: theme.color.accent,
+    fontFamily: theme.font.display,
+    fontWeight: 700,
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  newTableConfirmBtn: {
+    width: "100%",
+    padding: "13px",
+    borderRadius: theme.radius.sm,
+    border: "none",
+    background: `linear-gradient(135deg, ${theme.color.accent} 0%, #00c87a 100%)`,
+    color: theme.color.bg,
+    fontFamily: theme.font.display,
+    fontWeight: 800,
+    fontSize: 14,
+    cursor: "pointer",
   },
   errorBox: {
     padding: 20,

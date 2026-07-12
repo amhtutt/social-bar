@@ -3,9 +3,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // components/OrderStatusBadge.jsx  —  Persistent "you have orders in" indicator
 //
-// Small pill, visible from the Menu tab, showing how many orders this
-// table has placed and the most recent order's status. Subscribes to the
-// same table-orders feed BillTab uses, so it's always in sync.
+// Small pill + 2-stage stepper, visible from the Menu tab, summarizing
+// every active order this table has placed. Subscribes to the same
+// table-orders feed BillTab uses, so it's always in sync.
+//
+// Real order lifecycle (see lib/orderService.js): pending -> completed |
+// cancelled. Cancelled orders never reach here — isActiveOrder() filters
+// them out upstream — so only pending/completed ever show. The stepper
+// reflects the AGGREGATE of every active order, not just the most recent
+// one: a table that ordered three rounds where two are done and one is
+// still cooking is genuinely "in progress," not "ready."
 //
 // Tapping it calls onViewBill — lets the customer jump straight to the
 // Bill tab from wherever they are.
@@ -14,12 +21,6 @@
 import { useState, useEffect } from "react";
 import { subscribeToTableOrders } from "@/lib/orderService";
 import { theme } from "@/lib/theme";
-
-const STATUS_LABEL = {
-  pending: "Pending",
-  preparing: "Preparing",
-  served: "Served",
-};
 
 export default function OrderStatusBadge({ identity, onViewBill }) {
   const [orders, setOrders] = useState([]);
@@ -33,14 +34,24 @@ export default function OrderStatusBadge({ identity, onViewBill }) {
 
   if (orders.length === 0) return null;
 
-  const mostRecent = orders[orders.length - 1];
-  const statusLabel = STATUS_LABEL[mostRecent.status] ?? mostRecent.status;
+  const pendingCount = orders.filter((o) => o.status === "pending").length;
+  const completedCount = orders.length - pendingCount;
+  const allReady = pendingCount === 0;
+
+  let statusLabel;
+  if (pendingCount > 0 && completedCount > 0) statusLabel = `${completedCount} ready, ${pendingCount} preparing`;
+  else if (pendingCount > 0) statusLabel = "Preparing";
+  else statusLabel = "Ready";
 
   return (
     <button onClick={onViewBill} style={styles.badge}>
-      <span style={styles.dot} />
+      <div style={styles.stepper}>
+        <span style={{ ...styles.step, ...styles.stepFilled }} />
+        <span style={{ ...styles.stepLine, ...(allReady ? styles.stepLineFilled : {}) }} />
+        <span style={{ ...styles.step, ...(allReady ? styles.stepFilled : {}) }} />
+      </div>
       <span style={styles.text}>
-        {orders.length} order{orders.length === 1 ? "" : "s"} placed · {statusLabel}
+        {orders.length} order{orders.length === 1 ? "" : "s"} · {statusLabel}
       </span>
       <span style={styles.chevron}>›</span>
     </button>
@@ -51,7 +62,7 @@ const styles = {
   badge: {
     display: "flex",
     alignItems: "center",
-    gap: 8,
+    gap: 10,
     padding: "8px 14px",
     borderRadius: theme.radius.pill,
     border: `1px solid ${theme.color.accentBorder}`,
@@ -60,14 +71,29 @@ const styles = {
     marginBottom: 16,
     width: "fit-content",
   },
-  dot: {
+  stepper: {
+    display: "flex",
+    alignItems: "center",
+    flexShrink: 0,
+  },
+  step: {
     width: 7,
     height: 7,
     borderRadius: "50%",
+    background: theme.color.border,
+    flexShrink: 0,
+  },
+  stepFilled: {
     background: theme.color.accent,
     boxShadow: `0 0 6px ${theme.color.accentGlow}`,
-    flexShrink: 0,
-    animation: "ping 2s ease-out infinite",
+  },
+  stepLine: {
+    width: 14,
+    height: 2,
+    background: theme.color.border,
+  },
+  stepLineFilled: {
+    background: theme.color.accent,
   },
   text: {
     fontFamily: theme.font.display,
